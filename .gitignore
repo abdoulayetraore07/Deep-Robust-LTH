@@ -59,3 +59,6 @@ venv/
 arbre.txt
 venv/
 .conda/
+experiments/**/*.pt
+experiments/**/*.pth
+data/processed/*.npy
