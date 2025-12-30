@@ -54,3 +54,8 @@ Thumbs.db
 
 # Misc
 *.logarbre.txt
+venv/
+.conda/
+arbre.txt
+venv/
+.conda/
