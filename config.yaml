@@ -150,6 +150,6 @@ regime_shifts:
 # COMPUTE CONFIGURATION
 # ==================================================================================
 compute:
-  device: cuda              # 'cuda' or 'cpu'
+  device: auto              # 'cuda' or 'cpu'
   num_parallel_workers: 4   # Number of data loading workers
   mixed_precision: false    # Use AMP (Automatic Mixed Precision)

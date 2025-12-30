@@ -161,7 +161,7 @@ def validate_config(config: Dict[str, Any]) -> None:
 
 def get_device(config: Dict[str, Any]) -> str:
     """
-    Get device from config with validation
+    Get device from config with automatic detection
     
     Args:
         config: Configuration dictionary
@@ -171,12 +171,19 @@ def get_device(config: Dict[str, Any]) -> str:
     """
     import torch
     
-    device = config.get('device', 'cuda')
+    device_config = config.get('compute', {}).get('device', 'auto')
     
-    if device == 'cuda' and not torch.cuda.is_available():
-        print("WARNING: CUDA not available, falling back to CPU")
-        device = 'cpu'
-        
+    # Auto-détection
+    if device_config == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"🔍 Auto-detected device: {device}")
+    else:
+        device = device_config
+        if device == 'cuda' and not torch.cuda.is_available():
+            print(" WARNING: CUDA requested but not available, falling back to CPU")
+            device = 'cpu'
+    
+    print(f" Using device: {device}")
     return device
 
 
