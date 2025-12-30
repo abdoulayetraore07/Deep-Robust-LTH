@@ -1,0 +1,196 @@
+"""
+Configuration utilities for loading and validating config.yaml
+"""
+
+import yaml
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+
+class ConfigLoader:
+    """
+    Loads and validates configuration from YAML file
+    """
+    
+    def __init__(self, config_path: str = "config.yaml"):
+        """
+        Initialize config loader
+        
+        Args:
+            config_path: Path to config.yaml file
+        """
+        self.config_path = config_path
+        self.config = self._load_config()
+        
+    def _load_config(self) -> Dict[str, Any]:
+        """
+        Load configuration from YAML file
+        
+        Returns:
+            Dictionary containing configuration
+        """
+        if not os.path.exists(self.config_path):
+            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+            
+        with open(self.config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        return config
+    
+    def get(self, key_path: str, default: Any = None) -> Any:
+        """
+        Get configuration value using dot notation
+        
+        Args:
+            key_path: Path to config value (e.g., 'data.n_train')
+            default: Default value if key not found
+            
+        Returns:
+            Configuration value
+            
+        Example:
+            >>> config = ConfigLoader()
+            >>> n_train = config.get('data.n_train')
+            >>> lr = config.get('training.learning_rate', 0.001)
+        """
+        keys = key_path.split('.')
+        value = self.config
+        
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return default
+                
+        return value
+    
+    def set(self, key_path: str, value: Any) -> None:
+        """
+        Set configuration value using dot notation
+        
+        Args:
+            key_path: Path to config value (e.g., 'data.n_train')
+            value: Value to set
+        """
+        keys = key_path.split('.')
+        config = self.config
+        
+        for key in keys[:-1]:
+            if key not in config:
+                config[key] = {}
+            config = config[key]
+            
+        config[keys[-1]] = value
+    
+    def save(self, save_path: Optional[str] = None) -> None:
+        """
+        Save configuration to YAML file
+        
+        Args:
+            save_path: Path to save config (default: original path)
+        """
+        path = save_path or self.config_path
+        
+        with open(path, 'w') as f:
+            yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+    
+    def __getitem__(self, key: str) -> Any:
+        """
+        Allow dict-like access: config['data']
+        """
+        return self.config[key]
+    
+    def __repr__(self) -> str:
+        """
+        String representation
+        """
+        return f"ConfigLoader(config_path='{self.config_path}')"
+
+
+def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
+    """
+    Convenience function to load config directly
+    
+    Args:
+        config_path: Path to config.yaml
+        
+    Returns:
+        Configuration dictionary
+    """
+    loader = ConfigLoader(config_path)
+    return loader.config
+
+
+def validate_config(config: Dict[str, Any]) -> None:
+    """
+    Validate configuration has all required fields
+    
+    Args:
+        config: Configuration dictionary
+        
+    Raises:
+        ValueError: If required fields are missing
+    """
+    required_sections = [
+        'data',
+        'model',
+        'training',
+        'pruning',
+        'attacks',
+        'adversarial_training',
+        'evaluation',
+    ]
+    
+    for section in required_sections:
+        if section not in config:
+            raise ValueError(f"Missing required config section: {section}")
+    
+    # Validate data section
+    if 'heston' not in config['data']:
+        raise ValueError("Missing 'heston' parameters in data config")
+    
+    # Validate model section
+    if 'hidden_dims' not in config['model']:
+        raise ValueError("Missing 'hidden_dims' in model config")
+    
+    # Validate training section
+    if 'learning_rate' not in config['training']:
+        raise ValueError("Missing 'learning_rate' in training config")
+
+
+def get_device(config: Dict[str, Any]) -> str:
+    """
+    Get device from config with validation
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Device string ('cuda' or 'cpu')
+    """
+    import torch
+    
+    device = config.get('device', 'cuda')
+    
+    if device == 'cuda' and not torch.cuda.is_available():
+        print("WARNING: CUDA not available, falling back to CPU")
+        device = 'cpu'
+        
+    return device
+
+
+def print_config(config: Dict[str, Any], indent: int = 0) -> None:
+    """
+    Pretty print configuration
+    
+    Args:
+        config: Configuration dictionary
+        indent: Current indentation level
+    """
+    for key, value in config.items():
+        if isinstance(value, dict):
+            print('  ' * indent + f"{key}:")
+            print_config(value, indent + 1)
+        else:
+            print('  ' * indent + f"{key}: {value}")

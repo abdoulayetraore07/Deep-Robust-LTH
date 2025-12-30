@@ -1,0 +1,155 @@
+# ==================================================================================
+# DEEP ROBUST LTH CONFIGURATION
+# ==================================================================================
+
+# Random seed for reproducibility
+random_seed: 42
+
+# ==================================================================================
+# DATA CONFIGURATION
+# ==================================================================================
+data:
+  # Heston model parameters
+  heston:
+    S_0: 100.0          # Initial stock price
+    K: 100.0            # Strike price (ATM)
+    r: 0.02             # Risk-free rate
+    mu: 0.05            # Drift
+    v_0: 0.04           # Initial variance (20% vol)
+    kappa: 3.5          # Speed of mean reversion
+    theta: 0.04         # Long-term variance
+    xi: 0.3             # Volatility of volatility
+    rho: -0.7           # Correlation between stock and variance
+  
+  # Dataset sizes
+  n_train: 50000
+  n_val: 10000
+  n_test: 10000
+  
+  # Simulation parameters
+  T: 0.25                    # Time to maturity (3 months)
+  n_steps: 63                # Number of time steps (~ daily for 3 months)
+  dt: 0.003968253968254      # Time step (T / n_steps)
+  
+  # Transaction costs
+  transaction_cost:
+    c_prop: 0.001            # Proportional cost (10 bps)
+
+# ==================================================================================
+# MODEL CONFIGURATION
+# ==================================================================================
+model:
+  input_dim: 8
+  hidden_dims: [512, 512, 256]
+  dropout_rates: [0.2, 0.2, 0.1]
+  use_batch_norm: true
+
+# ==================================================================================
+# TRAINING CONFIGURATION
+# ==================================================================================
+training:
+  # Optimizer
+  optimizer_name: adam
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  momentum: 0.9              # For SGD
+  
+  # Learning rate schedule
+  lr_scheduler: cosine
+  warmup_steps: 0
+  
+  # Training duration
+  epochs: 100
+  batch_size: 256
+  
+  # Early stopping
+  patience: 20
+  
+  # Loss function
+  cvar_alpha: 0.05           # CVaR alpha (5%)
+
+# ==================================================================================
+# PRUNING CONFIGURATION
+# ==================================================================================
+pruning:
+  # Pruning strategy
+  pruning_strategy: sparse_global
+  
+  # Sparsity levels to test
+  sparsities: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+  
+  # Retraining after pruning
+  pruning_lr: 0.01           # LR for retraining tickets
+  pruning_lr_candidates: [0.001, 0.005, 0.01, 0.05, 0.1]  # For LR search
+  retrain_epochs: 40
+  
+  # Warmup for retraining
+  warmup_lr_start: 0.01
+  warmup_lr_end: 0.1
+
+# ==================================================================================
+# ADVERSARIAL ATTACKS CONFIGURATION
+# ==================================================================================
+attacks:
+  # FGSM attack (fast, for pruning phase)
+  fgsm:
+    epsilon_S: 0.02          # Max perturbation for stock price (2%)
+    epsilon_v: 0.2           # Max perturbation for variance (20%)
+  
+  # PGD attack (stronger, for evaluation and retraining)
+  pgd:
+    epsilon_S: 0.05          # Max perturbation for stock price (5%)
+    epsilon_v: 0.5           # Max perturbation for variance (50%)
+    alpha_S: 0.005           # Step size for stock price
+    alpha_v: 0.05            # Step size for variance
+    num_steps: 10            # Number of PGD iterations
+  
+  # Stress test (extreme perturbations)
+  stress:
+    epsilon_S: 0.10
+    epsilon_v: 1.0
+
+# ==================================================================================
+# ADVERSARIAL TRAINING CONFIGURATION (FGSM → PGD Protocol)
+# ==================================================================================
+adversarial_training:
+  # Phase 1: FGSM adversarial training
+  fgsm_phase:
+    epochs: 100
+    lr: 0.01
+  
+  # Phase 2: PGD retraining (after pruning)
+  pgd_phase:
+    epochs_candidates: [40, 60, 80, 100]  # Test different durations
+    lr_start: 0.01
+    lr_end: 0.1
+    warmup_epochs: 10
+
+# ==================================================================================
+# REGIME SHIFTS CONFIGURATION
+# ==================================================================================
+regime_shifts:
+  n_paths_per_regime: 10000
+  
+  # Calm regime (baseline - same as training)
+  calm:
+    theta: 0.04
+    xi: 0.3
+  
+  # High volatility regime
+  high_vol:
+    theta: 0.09             # Higher long-term variance
+    xi: 0.5                 # Higher vol of vol
+  
+  # Extreme regime (stress test)
+  extreme:
+    theta: 0.16
+    xi: 0.8
+
+# ==================================================================================
+# COMPUTE CONFIGURATION
+# ==================================================================================
+compute:
+  device: cuda              # 'cuda' or 'cpu'
+  num_parallel_workers: 4   # Number of data loading workers
+  mixed_precision: false    # Use AMP (Automatic Mixed Precision)
