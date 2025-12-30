@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from typing import Optional, Dict
 from ..models.losses import cvar_loss
 from ..utils.logging import setup_logger
+from pathlib import Path 
 
 
 def get_optimizer(model, training_config):
