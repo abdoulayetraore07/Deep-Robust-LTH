@@ -4,8 +4,6 @@ Loss functions for Deep Hedging
 
 import torch
 import torch.nn as nn
-from typing import Optional
-
 
 def compute_pnl(
     S: torch.Tensor,

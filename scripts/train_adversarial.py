@@ -2,7 +2,6 @@
 Script to train adversarial models (FGSM or PGD)
 """
 
-import os
 import sys
 import torch
 import numpy as np

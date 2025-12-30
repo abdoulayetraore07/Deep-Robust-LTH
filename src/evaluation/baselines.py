@@ -4,7 +4,6 @@ Baseline hedging strategies for comparison
 
 import numpy as np
 from scipy.stats import norm
-from typing import Tuple
 
 
 def black_scholes_delta(

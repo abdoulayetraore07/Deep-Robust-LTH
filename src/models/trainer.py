@@ -4,16 +4,40 @@ Training infrastructure for Deep Hedging
 
 import torch
 import torch.nn as nn
-from torch.optim import Optimizer
-from torch.optim.lr_scheduler import _LRScheduler
 from torch.utils.data import DataLoader
-from typing import Optional, List, Callable, Dict
-from pathlib import Path
-
+from typing import Optional, Dict
 from ..models.losses import cvar_loss
-from .optimizers import get_optimizer, get_lr_schedule
-from .metric_logger import MetricLogger
-from ..foundations.step import Step
+
+def get_optimizer(model, training_config):
+    """Create optimizer from config"""
+    optimizer_name = training_config['optimizer_name']
+    lr = training_config['learning_rate']
+    weight_decay = training_config.get('weight_decay', 0)
+    
+    if optimizer_name == 'adam':
+        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    elif optimizer_name == 'sgd':
+        momentum = training_config.get('momentum', 0.9)
+        return torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    else:
+        raise ValueError(f"Unknown optimizer: {optimizer_name}")
+
+def get_lr_schedule(optimizer, training_config):
+    """Create learning rate scheduler from config"""
+    scheduler_type = training_config.get('lr_scheduler', None)
+    
+    if scheduler_type is None:
+        return None
+    elif scheduler_type == 'cosine':
+        epochs = training_config['epochs']
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    elif scheduler_type == 'step':
+        step_size = training_config.get('lr_step_size', 30)
+        gamma = training_config.get('lr_gamma', 0.1)
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    else:
+        raise ValueError(f"Unknown scheduler: {scheduler_type}")
+    
 
 
 class Trainer:

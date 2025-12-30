@@ -48,7 +48,7 @@ def test_magnitude_pruning_sparsity(dummy_config):
     model = DeepHedgingNetwork(dummy_config['model'])
     
     target_sparsity = 0.8
-    mask = magnitude_pruning(model, sparsity=target_sparsity)
+    mask = magnitude_pruning(model, sparsity=target_sparsity, exclude_output=False)
     
     # Apply mask
     for name, param in model.named_parameters():
@@ -71,23 +71,19 @@ def test_mask_persistence_during_training(dummy_config, tmp_path):
     
     # Prune
     mask = magnitude_pruning(model, sparsity=0.5)
+
     
-    # Create dummy data
-    dummy_data = [(torch.randn(10, 63, 8), torch.randn(10, 63), torch.randn(10)) for _ in range(5)]
+    # Create dummy data with correct shape
     from torch.utils.data import DataLoader, TensorDataset
     
-    # Flatten for DataLoader
-    S_list, v_list, Z_list = [], [], []
-    for S, v, Z in dummy_data:
-        S_list.append(S)
-        v_list.append(v)
-        Z_list.append(Z)
+    n_paths = 50
+    n_steps = 63
     
-    S_all = torch.cat(S_list)
-    v_all = torch.cat(v_list)
-    Z_all = torch.cat(Z_list)
+    S_dummy = torch.rand(n_paths, n_steps) * 50 + 75  
+    v_dummy = torch.rand(n_paths, n_steps) * 0.05 + 0.01  
+    Z_dummy = torch.rand(n_paths) * 10  
     
-    dataset = TensorDataset(S_all, v_all, Z_all)
+    dataset = TensorDataset(S_dummy, v_dummy, Z_dummy)
     train_loader = DataLoader(dataset, batch_size=10)
     val_loader = DataLoader(dataset, batch_size=10)
     

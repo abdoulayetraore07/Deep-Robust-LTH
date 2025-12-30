@@ -15,11 +15,11 @@ data:
     K: 100.0            # Strike price (ATM)
     r: 0.02             # Risk-free rate
     mu: 0.05            # Drift
-    v_0: 0.04           # Initial variance (20% vol)
-    kappa: 3.5          # Speed of mean reversion
-    theta: 0.04         # Long-term variance
-    xi: 0.3             # Volatility of volatility
-    rho: -0.7           # Correlation between stock and variance
+    v_0: 0.0175         # Initial variance (20% vol)
+    kappa: 1.5768       # Speed of mean reversion
+    theta: 0.0398       # Long-term variance
+    xi: 0.5751          # Volatility of volatility
+    rho: -0.5711        # Correlation between stock and variance
   
   # Dataset sizes
   n_train: 50000
@@ -27,9 +27,9 @@ data:
   n_test: 10000
   
   # Simulation parameters
-  T: 0.25                    # Time to maturity (3 months)
-  n_steps: 63                # Number of time steps (~ daily for 3 months)
-  dt: 0.003968253968254      # Time step (T / n_steps)
+  T: 1                    # Time to maturity (3 months)
+  n_steps: 1000            # Number of time steps (~ daily for 3 months)
+  dt: 0.001               # Time step (T / n_steps)
   
   # Transaction costs
   transaction_cost:

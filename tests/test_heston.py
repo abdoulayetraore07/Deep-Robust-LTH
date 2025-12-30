@@ -17,11 +17,11 @@ def heston_params():
     """Default Heston parameters"""
     return {
         'S_0': 100.0,
-        'v_0': 0.04,
-        'kappa': 2.0,
-        'theta': 0.04,
-        'xi': 0.3,
-        'rho': -0.7,
+        'v_0': 0.0175,      
+        'kappa': 1.5768,    
+        'theta': 0.0398,    
+        'xi': 0.5751,       
+        'rho': -0.5711,     
         'mu': 0.05,
         'r': 0.02,
         'K': 100.0
@@ -33,8 +33,8 @@ def test_heston_initialization(heston_params):
     sim = HestonSimulator(heston_params)
     
     assert sim.S_0 == 100.0
-    assert sim.v_0 == 0.04
-    assert sim.kappa == 2.0
+    assert sim.v_0 == 0.0175
+    assert sim.kappa == 1.5768
 
 
 def test_heston_simulation_shape(heston_params):
@@ -43,7 +43,7 @@ def test_heston_simulation_shape(heston_params):
     
     n_paths = 1000
     T = 1.0
-    n_steps = 252
+    n_steps = 100
     
     S, v = sim.simulate(n_paths, T, n_steps, seed=42)
     
@@ -58,7 +58,7 @@ def test_heston_positivity(heston_params):
     
     n_paths = 1000
     T = 1.0
-    n_steps = 252
+    n_steps = 1000
     
     S, v = sim.simulate(n_paths, T, n_steps, seed=42)
     
@@ -72,7 +72,7 @@ def test_heston_moments(heston_params):
     
     n_paths = 50000
     T = 1.0
-    n_steps = 252
+    n_steps = 1000
     
     S, v = sim.simulate(n_paths, T, n_steps, seed=42)
     

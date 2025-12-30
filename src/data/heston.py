@@ -10,27 +10,13 @@ class HestonSimulator:
     """
     Heston model simulator with Inverse Gaussian discretization scheme
     
-    dS_t = mu * S_t * dt + sqrt(v_t) * S_t * dW_S
+    dS_t = r * S_t * dt + sqrt(v_t) * S_t * dW_S   sous Q (risk-neutral measure)
     dv_t = kappa * (theta - v_t) * dt + xi * sqrt(v_t) * dW_v
     
     Corr(dW_S, dW_v) = rho * dt
     """
     
     def __init__(self, params: dict):
-        """
-        Initialize Heston simulator
-        
-        Args:
-            params: Dictionary with Heston parameters
-                - S_0: Initial stock price
-                - v_0: Initial variance
-                - kappa: Mean reversion speed
-                - theta: Long-term variance
-                - xi: Volatility of volatility
-                - rho: Correlation between S and v
-                - mu: Drift
-                - r: Risk-free rate
-        """
         self.S_0 = params['S_0']
         self.v_0 = params['v_0']
         self.kappa = params['kappa']
@@ -47,19 +33,6 @@ class HestonSimulator:
         n_steps: int,
         seed: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Simulate Heston paths using Inverse Gaussian scheme
-        
-        Args:
-            n_paths: Number of sample paths
-            T: Time horizon (in years)
-            n_steps: Number of time steps
-            seed: Random seed for reproducibility
-            
-        Returns:
-            S: Stock price paths (n_paths, n_steps+1)
-            v: Variance paths (n_paths, n_steps+1)
-        """
         if seed is not None:
             np.random.seed(seed)
         
@@ -75,13 +48,12 @@ class HestonSimulator:
         
         # Parameters for IG scheme
         a = self.kappa * self.theta
-        b = -self.kappa
         c = self.xi
         
-        # Generate random numbers (all at once for speed)
-        Z_v = np.random.randn(n_paths, n_steps)  # For variance process
-        U = np.random.uniform(0, 1, (n_paths, n_steps))  # For IG generator
-        Z_S = np.random.randn(n_paths, n_steps)  # Independent noise for S
+       
+        Z_IG = np.random.randn(n_paths, n_steps)    # Pour générateur IG
+        U_IG = np.random.uniform(0, 1, (n_paths, n_steps))  # Pour générateur IG
+        Z_S = np.random.randn(n_paths, n_steps)     # Pour prix S
         
         # Simulate variance process using IG scheme
         for t in range(n_steps):
@@ -92,21 +64,23 @@ class HestonSimulator:
             mu_ig = alpha_t / (1.0 + self.kappa * dt)
             lambda_ig = (alpha_t ** 2) / (c ** 2 * dt)
             
-            # Generate v_{t+1} from Inverse Gaussian
-            v[:, t+1] = self._inverse_gaussian_generator(mu_ig, lambda_ig, Z_v[:, t], U[:, t])
+            
+            v[:, t+1] = self._inverse_gaussian_generator(mu_ig, lambda_ig, Z_IG[:, t], U_IG[:, t])
         
-        # Simulate stock price process
+       
+        # Brownien corrélé (on ne peut pas le précalculer car on a besoin de v)
+        dW_S_all = np.zeros((n_paths, n_steps))
         for t in range(n_steps):
-            v_t = v[:, t]
-            
-            # Correlated Brownian motion
-            dW_v = Z_v[:, t] * np.sqrt(dt)
-            dW_S = self.rho * dW_v + np.sqrt(1 - self.rho**2) * Z_S[:, t] * np.sqrt(dt)
-            
-            # Stock price update
-            S[:, t+1] = S[:, t] * np.exp(
-                (self.r - 0.5 * v_t) * dt + np.sqrt(np.maximum(v_t, 0)) * dW_S
-            )
+            # Composante corrélée
+            dW_v_t = Z_IG[:, t] * np.sqrt(dt)  # Utilise Z_IG pour cohérence
+            # Composante indépendante
+            dW_S_all[:, t] = self.rho * dW_v_t + np.sqrt(1 - self.rho**2) * Z_S[:, t] * np.sqrt(dt)
+        
+        # Prix S
+        drift_term = (self.r - 0.5 * v[:, :-1]) * dt
+        diffusion_term = np.sqrt(np.maximum(v[:, :-1], 0)) * dW_S_all
+        log_returns = drift_term + diffusion_term
+        S[:, 1:] = self.S_0 * np.exp(np.cumsum(log_returns, axis=1))
         
         return S, v
     
@@ -117,20 +91,6 @@ class HestonSimulator:
         Z: np.ndarray,
         U: np.ndarray
     ) -> np.ndarray:
-        """
-        Generate samples from Inverse Gaussian distribution
-        
-        Michael, Schucany & Haas algorithm
-        
-        Args:
-            mu: Mean parameter
-            lambda_p: Shape parameter
-            Z: Standard normal random variables
-            U: Uniform random variables
-            
-        Returns:
-            Samples from IG(mu, lambda_p)
-        """
         # Avoid division by zero
         mu = np.maximum(mu, 1e-10)
         lambda_p = np.maximum(lambda_p, 1e-10)
@@ -155,25 +115,14 @@ class HestonSimulator:
         T: float,
         tolerance: float = 0.01
     ) -> dict:
-        """
-        Validate simulated variance against theoretical moments
-        
-        Args:
-            v: Simulated variance paths (n_paths, n_steps+1)
-            T: Time horizon
-            tolerance: Tolerance for moment matching
-            
-        Returns:
-            Dictionary with validation results
-        """
         v_T = v[:, -1]
         
         # Theoretical moments
         E_v_T_theo = self.theta + (self.v_0 - self.theta) * np.exp(-self.kappa * T)
         
-        Var_v_T_theo = (self.xi ** 2 / (2 * self.kappa)) * (self.v_0 - self.theta) * (
+        Var_v_T_theo = self.v_0 * (self.xi ** 2 / self.kappa) * (
             np.exp(-self.kappa * T) - np.exp(-2 * self.kappa * T)
-        ) + (self.xi ** 2 * self.theta / (2 * self.kappa)) * (1 - np.exp(-self.kappa * T)) ** 2
+        ) + self.theta * (self.xi ** 2 / (2 * self.kappa)) * (1 - np.exp(-self.kappa * T)) ** 2
         
         # Empirical moments
         E_v_T_emp = np.mean(v_T)
