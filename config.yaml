@@ -15,16 +15,16 @@ data:
     K: 100.0            # Strike price (ATM)
     r: 0.02             # Risk-free rate
     mu: 0.05            # Drift
-    v_0: 0.0175         # Initial variance (20% vol)
+    v_0: 0.0175         # Initial variance 
     kappa: 1.5768       # Speed of mean reversion
     theta: 0.0398       # Long-term variance
     xi: 0.5751          # Volatility of volatility
     rho: -0.5711        # Correlation between stock and variance
   
   # Dataset sizes
-  n_train: 50000
-  n_val: 10000
-  n_test: 10000
+  n_train: 100000
+  n_val: 15000
+  n_test: 15000
   
   # Simulation parameters
   T: 1                    # Time to maturity (3 months)
@@ -153,3 +153,21 @@ compute:
   device: auto              # 'cuda' or 'cpu'
   num_parallel_workers: 4   # Number of data loading workers
   mixed_precision: false    # Use AMP (Automatic Mixed Precision)
+
+# ==================================================================================
+# LOGGING CONFIGURATION
+# ==================================================================================
+logging:
+  use_tensorboard: true
+  tensorboard_dir: "experiments/tensorboard"
+
+# Experiment name
+experiment_name: "baseline_deep_hedging"
+
+# ==================================================================================
+# EVALUATION CONFIGURATION
+# ==================================================================================
+evaluation:
+  compute_baselines: true      # Compare with Delta hedging
+  compute_robustness: true     # Evaluate under attacks
+  save_predictions: false      # Save all predictions (large files)

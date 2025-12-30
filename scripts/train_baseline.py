@@ -66,7 +66,7 @@ def main():
     model = DeepHedgingNetwork(config['model'])
     print(f"Model created with {model.get_num_parameters()} parameters")
     
-    # ✅ CORRECTION: Save initial weights BEFORE training
+    # Save initial weights BEFORE training
     output_dir = Path('experiments/baseline')
     output_dir.mkdir(parents=True, exist_ok=True)
     

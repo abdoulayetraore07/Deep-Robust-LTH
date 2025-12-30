@@ -14,7 +14,7 @@ def compute_pnl(
     """
     Compute P&L for a hedging strategy
     
-    P&L = Z - (sum of trading P&L) - (transaction costs)
+    P&L = -Z + (sum of trading P&L) - (transaction costs)
     
     Args:
         S: Stock prices (batch, n_steps)
@@ -35,9 +35,8 @@ def compute_pnl(
     delta_changes = torch.abs(delta[:, 1:] - delta[:, :-1])  # (batch, n_steps-1)
     costs = c_prop * delta_changes.sum(dim=1)  # (batch,)
     
-    # Final P&L: payoff - trading P&L - costs
-    # Note: We subtract trading_pnl because we're short the derivative
-    pnl = Z - trading_pnl - costs
+    # Final P&L: - payoff + trading P&L - costs
+    pnl = -Z + trading_pnl - costs
     
     return pnl
 

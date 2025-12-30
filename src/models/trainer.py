@@ -7,6 +7,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Optional, Dict
 from ..models.losses import cvar_loss
+from ..utils.logging import setup_logger
+
 
 def get_optimizer(model, training_config):
     """Create optimizer from config"""
@@ -81,6 +83,12 @@ class Trainer:
         # Early stopping
         self.patience = config['training'].get('patience', 20)
         self.patience_counter = 0
+
+        # Logger pour TensorBoard
+        if 'logging' in config and 'experiment_name' in config:
+            self.logger = setup_logger(config)
+        else:
+            self.logger = None
     
     def train_epoch(
         self,
@@ -133,7 +141,7 @@ class Trainer:
             # Optimizer step
             self.optimizer.step()
             
-            # ✅ AJOUT CRITIQUE: Re-apply mask after optimizer step
+            # Re-apply mask after optimizer step
             if self.mask is not None:
                 self._apply_mask()
             
@@ -227,6 +235,13 @@ class Trainer:
             
             # Print progress
             print(f"Epoch {epoch+1}/{num_epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}")
+
+            # Log metrics to TensorBoard
+            if self.logger:
+                self.logger.log_metrics({
+                    'train_loss': train_loss,
+                    'val_loss': val_loss
+                }, step=epoch)
             
             # Early stopping
             if val_loss < self.best_val_loss:
@@ -239,6 +254,10 @@ class Trainer:
                     print(f"Early stopping at epoch {epoch+1}")
                     break
         
+        # Close logger
+        if self.logger:
+            self.logger.close()
+
         return self.best_val_loss
     
     def _compute_features_batch(

@@ -5,7 +5,6 @@ Projected Gradient Descent (PGD) attack
 import torch
 import torch.nn as nn
 from typing import Tuple
-
 from ..models.losses import compute_pnl, cvar_loss
 
 
@@ -27,6 +26,7 @@ def pgd_attack(
     PGD attack on price and volatility
     
     Iteratively perturbs inputs to maximize CVaR loss
+    Uses MULTIPLICATIVE perturbations for financial data
     
     Args:
         model: Hedging network
@@ -35,18 +35,18 @@ def pgd_attack(
         Z: Payoffs (batch,)
         features_fn: Function to compute features
         config: Configuration dict
-        epsilon_S: Max perturbation on price (fraction)
-        epsilon_v: Max perturbation on volatility (fraction)
+        epsilon_S: Max relative perturbation on price (fraction)
+        epsilon_v: Max relative perturbation on variance (fraction)
         alpha_S: Step size for price perturbation
         alpha_v: Step size for volatility perturbation
-        num_steps: Number of PGD steps
+        num_steps: Number of PGD iterations
         random_start: Whether to start from random perturbation
         
     Returns:
         S_adv: Adversarial prices (batch, n_steps)
         v_adv: Adversarial variances (batch, n_steps)
     """
-    # Initialize perturbations
+    # Initialize perturbations (relative perturbations)
     if random_start:
         delta_S = torch.zeros_like(S).uniform_(-epsilon_S, epsilon_S)
         delta_v = torch.zeros_like(v).uniform_(-epsilon_v, epsilon_v)
@@ -56,11 +56,17 @@ def pgd_attack(
     
     # PGD iterations
     for step in range(num_steps):
+        # Zero gradients explicitly
+        if delta_S.grad is not None:
+            delta_S.grad.zero_()
+        if delta_v.grad is not None:
+            delta_v.grad.zero_()
+        
         # Enable gradients
         delta_S.requires_grad = True
         delta_v.requires_grad = True
         
-        # Apply perturbations
+        # Apply perturbations (multiplicative)
         S_adv = S * (1 + delta_S)
         v_adv = v * (1 + delta_v)
         
@@ -89,10 +95,10 @@ def pgd_attack(
             # Ensure validity (price and variance > 0)
             S_temp = S * (1 + delta_S)
             v_temp = v * (1 + delta_v)
-            
             S_temp = torch.clamp(S_temp, 1e-6, None)
             v_temp = torch.clamp(v_temp, 1e-6, None)
             
+            # Recompute deltas to respect positivity constraint
             delta_S = S_temp / S - 1
             delta_v = v_temp / v - 1
         

@@ -126,7 +126,7 @@ class AdversarialTrainer(Trainer):
             # Optimizer step
             self.optimizer.step()
             
-            # ✅ AJOUT CRITIQUE: Re-apply mask
+            # Re-apply mask
             if self.mask is not None:
                 self._apply_mask()
             
@@ -192,12 +192,24 @@ class AdversarialTrainer(Trainer):
             
             # Print progress
             print(f"Epoch {epoch+1}/{epochs} (lr={lr:.6f}): train_loss={train_loss:.6f}, val_loss={val_loss:.6f}")
+
+            # Log metrics
+            if self.logger:
+                self.logger.log_metrics({
+                    'train_loss': train_loss,
+                    'val_loss': val_loss,
+                    'learning_rate': lr
+                }, step=epoch)
             
             # Save best
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.save_checkpoint('experiments/adversarial_training/best_model.pt')
         
+        # Close logger
+        if self.logger:
+            self.logger.close()
+            
         # Restore original epochs
         self.config['training']['epochs'] = original_epochs
         

@@ -91,7 +91,7 @@ def delta_hedging_baseline(
     costs = c_prop * delta_changes.sum(axis=1)
     
     # Final P&L
-    pnl = Z - trading_pnl - costs
+    pnl = - Z + trading_pnl - costs
     
     # Hedging error
     hedging_error = np.abs(Z - trading_pnl)
@@ -128,7 +128,7 @@ def no_hedging_baseline(
         Dictionary of metrics
     """
     # P&L = just the payoff (no hedging)
-    pnl = Z
+    pnl = - Z
     
     # Compute metrics
     metrics = {

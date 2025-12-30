@@ -5,7 +5,6 @@ Fast Gradient Sign Method (FGSM) attack
 import torch
 import torch.nn as nn
 from typing import Tuple
-
 from ..models.losses import compute_pnl, cvar_loss
 
 
@@ -23,6 +22,7 @@ def fgsm_attack(
     FGSM attack on price and volatility
     
     Perturbs inputs to maximize CVaR loss (worst-case P&L)
+    Uses MULTIPLICATIVE perturbations for financial data
     
     Args:
         model: Hedging network
@@ -31,8 +31,8 @@ def fgsm_attack(
         Z: Payoffs (batch,)
         features_fn: Function to compute features
         config: Configuration dict
-        epsilon_S: Max perturbation on price (fraction)
-        epsilon_v: Max perturbation on volatility (fraction)
+        epsilon_S: Max relative perturbation on price (fraction, e.g. 0.02 = 2%)
+        epsilon_v: Max relative perturbation on variance (fraction, e.g. 0.2 = 20%)
         
     Returns:
         S_adv: Adversarial prices (batch, n_steps)
@@ -55,18 +55,21 @@ def fgsm_attack(
     # Backward pass
     loss.backward()
     
-    # FGSM step: perturb in direction of gradient sign
+    # FGSM step: MULTIPLICATIVE perturbation (finance-adapted)
+    # Formula: x_adv = x * (1 + epsilon * sign(grad))
     S_grad_sign = S_adv.grad.sign()
     v_grad_sign = v_adv.grad.sign()
     
-    S_adv = S_adv + epsilon_S * S * S_grad_sign
-    v_adv = v_adv + epsilon_v * v * v_grad_sign
+    S_adv = S * (1 + epsilon_S * S_grad_sign)
+    v_adv = v * (1 + epsilon_v * v_grad_sign)
     
     # Clip to ensure validity
+    # 1. Stay within epsilon-ball
     S_adv = torch.clamp(S_adv, S * (1 - epsilon_S), S * (1 + epsilon_S))
-    S_adv = torch.clamp(S_adv, 1e-6, None)  # Price > 0
-    
     v_adv = torch.clamp(v_adv, v * (1 - epsilon_v), v * (1 + epsilon_v))
-    v_adv = torch.clamp(v_adv, 1e-6, None)  # Variance > 0
+    
+    # 2. Ensure positivity (financial constraints)
+    S_adv = torch.clamp(S_adv, 1e-6, None)
+    v_adv = torch.clamp(v_adv, 1e-6, None)
     
     return S_adv.detach(), v_adv.detach()

@@ -17,7 +17,7 @@ class MaskApplier:
         Initialize mask applier
         
         Args:
-            mask: Dictionary of {layer_name: binary_mask}
+            mask: Dictionary of {parameter_name: binary_mask}
         """
         self.mask = mask
     
@@ -28,26 +28,24 @@ class MaskApplier:
         Args:
             model: Neural network
         """
-        for name, module in model.named_modules():
-            if name in self.mask and isinstance(module, nn.Linear):
-                module.weight.data *= self.mask[name]
-                
+        for name, param in model.named_parameters():
+            if name in self.mask:
+                param.data *= self.mask[name]
                 # Also zero gradients of pruned weights
-                if module.weight.grad is not None:
-                    module.weight.grad *= self.mask[name]
+                if param.grad is not None:
+                    param.grad *= self.mask[name]
     
     def register_hooks(self, model: nn.Module) -> None:
         """
-        Register hooks to automatically apply mask after each optimizer step
+        Register hooks to automatically apply mask after each gradient computation
         
         Args:
             model: Neural network
         """
-        for name, module in model.named_modules():
-            if name in self.mask and isinstance(module, nn.Linear):
+        for name, param in model.named_parameters():
+            if name in self.mask:
                 def make_hook(mask):
                     def hook(grad):
                         return grad * mask
                     return hook
-                
-                module.weight.register_hook(make_hook(self.mask[name]))
+                param.register_hook(make_hook(self.mask[name]))

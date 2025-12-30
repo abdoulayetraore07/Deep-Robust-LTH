@@ -115,7 +115,7 @@ def load_mask(filepath: str) -> Dict[str, torch.Tensor]:
     return torch.load(filepath)
 
 
-# ✅ FONCTION MANQUANTE
+
 def rewind_weights(
     model: nn.Module,
     init_weights_path: str,
