@@ -134,7 +134,7 @@ def rewind_weights(
         mask: Pruning mask to apply
     """
     # Load initial weights
-    init_state = torch.load(init_weights_path)
+    init_state = torch.load(init_weights_path, weights_only=False)
     model.load_state_dict(init_state)
     
     # Apply mask
