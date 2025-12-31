@@ -9,16 +9,17 @@ from typing import Tuple, Optional
 
 
 def compute_features(
-    S: np.ndarray,
-    v: np.ndarray,
+    S,  # Accepte np.ndarray OU torch.Tensor
+    v,  # Accepte np.ndarray OU torch.Tensor
     K: float,
     T: float,
     dt: float,
-    delta_prev: Optional[np.ndarray] = None,
-    pnl_prev: Optional[np.ndarray] = None
-) -> np.ndarray:
+    delta_prev=None,
+    pnl_prev=None
+):
     """
     Compute 8 features from Heston paths
+    Détecte automatiquement numpy vs torch et compute sur GPU si possible
     
     Features:
     1. log(S_t / K) - log-moneyness
@@ -31,8 +32,8 @@ def compute_features(
     8. PnL_{t-1} - cumulative P&L
     
     Args:
-        S: Stock prices (n_paths, n_steps)
-        v: Variances (n_paths, n_steps)
+        S: Stock prices (n_paths, n_steps) - numpy array OR torch tensor
+        v: Variances (n_paths, n_steps) - numpy array OR torch tensor
         K: Strike price
         T: Time to maturity
         dt: Time step
@@ -40,39 +41,77 @@ def compute_features(
         pnl_prev: Cumulative P&L (n_paths, n_steps), optional
         
     Returns:
-        features: (n_paths, n_steps, 8)
+        features: (n_paths, n_steps, 8) - same type as input (numpy or torch)
     """
-    n_paths, n_steps = S.shape
-    features = np.zeros((n_paths, n_steps, 8))
+    # Détection automatique du type
+    is_torch = isinstance(S, torch.Tensor)
     
-    for t in range(n_steps):
+    if is_torch:
+
+        device = S.device
+        n_paths, n_steps = S.shape
+        features = torch.zeros(n_paths, n_steps, 8, device=device, dtype=S.dtype)
+        
         # Feature 1: Log-moneyness
-        features[:, t, 0] = np.log(S[:, t] / K)
+        features[:, :, 0] = torch.log(S / K)
         
         # Feature 2: Return
-        if t > 0:
-            features[:, t, 1] = (S[:, t] - S[:, t-1]) / S[:, t-1]
+        features[:, 1:, 1] = (S[:, 1:] - S[:, :-1]) / S[:, :-1]
         
         # Feature 3: Volatility (sqrt of variance)
-        features[:, t, 2] = np.sqrt(v[:, t])
+        features[:, :, 2] = torch.sqrt(v)
         
         # Feature 4: Variance change
-        if t > 0:
-            features[:, t, 3] = v[:, t] - v[:, t-1]
+        features[:, 1:, 3] = v[:, 1:] - v[:, :-1]
         
         # Feature 5: Time to maturity
-        features[:, t, 4] = (T - t * dt) / T
+        for t in range(n_steps):
+            features[:, t, 4] = (T - t * dt) / T
         
         # Feature 6: Previous delta
         if delta_prev is not None:
-            features[:, t, 5] = delta_prev[:, t]
+            features[:, :, 5] = delta_prev
         
         # Feature 7: Trading volume (computed during training)
         # Will be filled during forward pass
         
         # Feature 8: Cumulative PnL
         if pnl_prev is not None:
-            features[:, t, 7] = pnl_prev[:, t]
+            features[:, :, 7] = pnl_prev
+            
+    else:
+       
+        n_paths, n_steps = S.shape
+        features = np.zeros((n_paths, n_steps, 8))
+        
+        for t in range(n_steps):
+            # Feature 1: Log-moneyness
+            features[:, t, 0] = np.log(S[:, t] / K)
+            
+            # Feature 2: Return
+            if t > 0:
+                features[:, t, 1] = (S[:, t] - S[:, t-1]) / S[:, t-1]
+            
+            # Feature 3: Volatility (sqrt of variance)
+            features[:, t, 2] = np.sqrt(v[:, t])
+            
+            # Feature 4: Variance change
+            if t > 0:
+                features[:, t, 3] = v[:, t] - v[:, t-1]
+            
+            # Feature 5: Time to maturity
+            features[:, t, 4] = (T - t * dt) / T
+            
+            # Feature 6: Previous delta
+            if delta_prev is not None:
+                features[:, t, 5] = delta_prev[:, t]
+            
+            # Feature 7: Trading volume (computed during training)
+            # Will be filled during forward pass
+            
+            # Feature 8: Cumulative PnL
+            if pnl_prev is not None:
+                features[:, t, 7] = pnl_prev[:, t]
     
     return features
 

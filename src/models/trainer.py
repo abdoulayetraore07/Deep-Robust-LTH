@@ -270,7 +270,7 @@ class Trainer:
         dt: float
     ) -> torch.Tensor:
         """
-        Compute features for a batch
+        Compute features for a batch DIRECTEMENT sur GPU
         
         Args:
             S: Stock prices (batch, n_steps)
@@ -284,17 +284,10 @@ class Trainer:
         """
         from ..data.preprocessor import compute_features
         
-        # Convert to numpy
-        S_np = S.cpu().numpy()
-        v_np = v.cpu().numpy()
-        
-        # Compute features
-        features_np = compute_features(S_np, v_np, K, T, dt)
-        
-        # Convert back to tensor
-        features = torch.from_numpy(features_np).float().to(self.device)
+        features = compute_features(S, v, K, T, dt)
         
         return features
+    
     
     def _apply_mask(self):
         """

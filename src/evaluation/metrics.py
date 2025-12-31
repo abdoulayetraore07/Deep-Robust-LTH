@@ -237,7 +237,6 @@ def _evaluate_under_attack(
     
     return metrics
 
-
 def _compute_features_batch(
     S: torch.Tensor,
     v: torch.Tensor,
@@ -249,23 +248,10 @@ def _compute_features_batch(
     """
     Compute features for a batch (helper function)
     """
-    batch_size, n_steps = S.shape
-    features = torch.zeros(batch_size, n_steps, 8, device=device)
+    from ..data.preprocessor import compute_features
     
-    # Feature 1: Log-moneyness
-    features[:, :, 0] = torch.log(S / K)
-    
-    # Feature 2: Return
-    features[:, 1:, 1] = (S[:, 1:] - S[:, :-1]) / S[:, :-1]
-    
-    # Feature 3: Volatility
-    features[:, :, 2] = torch.sqrt(v)
-    
-    # Feature 4: Variance change
-    features[:, 1:, 3] = v[:, 1:] - v[:, :-1]
-    
-    # Feature 5: Time to maturity
-    for t in range(n_steps):
-        features[:, t, 4] = (T - t * dt) / T
+    # Compute direct sur GPU
+    features = compute_features(S, v, K, T, dt)
     
     return features
+

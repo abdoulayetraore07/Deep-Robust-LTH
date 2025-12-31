@@ -91,6 +91,7 @@ def main():
     np.save(output_dir / 'Z_test.npy', Z_test)
     
     print(f"Data saved to {output_dir}/")
+    
     print("Statistics:")
     print(f"  Training: S in [{S_train.min():.2f}, {S_train.max():.2f}], v in [{v_train.min():.6f}, {v_train.max():.6f}]")
     print(f"  Mean payoff: {Z_train.mean():.4f}")
