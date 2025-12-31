@@ -18,7 +18,7 @@ data:
     v_0: 0.0175         # Initial variance 
     kappa: 1.5768       # Speed of mean reversion
     theta: 0.0398       # Long-term variance
-    xi: 0.5751          # Volatility of volatility
+    xi: 0.5751          # Volatility of volatility : or sigma
     rho: -0.5711        # Correlation between stock and variance
   
   # Dataset sizes
@@ -27,9 +27,9 @@ data:
   n_test: 15000
   
   # Simulation parameters
-  T: 1                    # Time to maturity (3 months)
-  n_steps: 1000            # Number of time steps (~ daily for 3 months)
-  dt: 0.001               # Time step (T / n_steps)
+  T: 0.25               # Time to maturity (3 months)
+  n_steps: 200          # Number of time steps (~ 3 times per day for 3 months)
+  dt: 0.00125           # Time step (T / n_steps)
   
   # Transaction costs
   transaction_cost:
@@ -41,7 +41,7 @@ data:
 model:
   input_dim: 8
   hidden_dims: [256, 256, 128]
-  dropout_rates: [0.2, 0.2, 0.1]
+  dropout_rates: [0.15, 0.15, 0.05]
   use_batch_norm: true
 
 # ==================================================================================
