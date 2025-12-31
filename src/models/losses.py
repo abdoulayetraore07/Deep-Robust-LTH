@@ -9,17 +9,19 @@ def compute_pnl(
     S: torch.Tensor,
     delta: torch.Tensor,
     Z: torch.Tensor,
+    y: torch.Tensor,
     c_prop: float = 0.001
 ) -> torch.Tensor:
     """
     Compute P&L for a hedging strategy
     
-    P&L = -Z + (sum of trading P&L) - (transaction costs)
+    P&L = y - Z + (sum of trading P&L) - (transaction costs)
     
     Args:
         S: Stock prices (batch, n_steps)
         delta: Hedging positions (batch, n_steps)
         Z: Payoffs at maturity (batch,)
+        y: Learned premium (scalar)
         c_prop: Proportional transaction cost
         
     Returns:
@@ -35,8 +37,8 @@ def compute_pnl(
     delta_changes = torch.abs(delta[:, 1:] - delta[:, :-1])  # (batch, n_steps-1)
     costs = c_prop * delta_changes.sum(dim=1)  # (batch,)
     
-    # Final P&L: - payoff + trading P&L - costs
-    pnl = -Z + trading_pnl - costs
+    # Final P&L: y - payoff + trading P&L - costs
+    pnl = y - Z + trading_pnl - costs
     
     return pnl
 

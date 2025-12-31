@@ -27,13 +27,13 @@ data:
   n_test: 15000
   
   # Simulation parameters
-  T: 0.25               # Time to maturity (3 months)
-  n_steps: 200          # Number of time steps (~ 3 times per day for 3 months)
-  dt: 0.00125           # Time step (T / n_steps)
+  T: 0.0833             # Time to maturity (1 month)
+  n_steps: 30           # Number of time steps (1 per day)
+  dt: 0.002777          # Time step (T / n_steps)
   
   # Transaction costs
   transaction_cost:
-    c_prop: 0.001            # Proportional cost (10 bps)
+    c_prop: 0.001       # Proportional cost (10 bps)
 
 # ==================================================================================
 # MODEL CONFIGURATION
@@ -63,7 +63,7 @@ training:
   batch_size: 256
   
   # Early stopping
-  patience: 20
+  patience: 30
   
   # Loss function
   cvar_alpha: 0.05           # CVaR alpha (5%)

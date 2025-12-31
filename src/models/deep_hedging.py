@@ -54,6 +54,9 @@ class DeepHedgingNetwork(nn.Module):
         
         self.network = nn.Sequential(*layers)
         
+        # Learnable premium (y) - scalar parameter
+        self.y = nn.Parameter(torch.tensor(0.0))
+        
         # Initialize weights
         self._initialize_weights()
     
@@ -67,7 +70,7 @@ class DeepHedgingNetwork(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
     
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
+    def forward(self, features: torch.Tensor) -> tuple:
         """
         Forward pass
         
@@ -76,6 +79,7 @@ class DeepHedgingNetwork(nn.Module):
             
         Returns:
             delta: (batch, n_steps) - hedging positions
+            y: scalar - learned premium
         """
         batch_size, n_steps, n_features = features.shape
         
@@ -88,7 +92,7 @@ class DeepHedgingNetwork(nn.Module):
         # Reshape back: (batch, n_steps)
         delta = delta.reshape(batch_size, n_steps)
         
-        return delta
+        return delta, self.y
     
     def get_num_parameters(self) -> int:
         """

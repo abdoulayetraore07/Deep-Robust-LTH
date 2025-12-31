@@ -75,6 +75,7 @@ def main():
     best_val_loss = trainer.fit(train_loader, val_loader, K, T, dt)
     
     print(f"Training complete. Best validation loss: {best_val_loss:.6f}")
+    print(f"Learned premium (y): {model.y.item():.6f}")
     
     # Save model
     output_dir = Path(args.output)

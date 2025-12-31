@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Optional, Dict
-from ..models.losses import cvar_loss
+from ..models.losses import cvar_loss, compute_pnl
 from ..utils.logging import setup_logger
 from pathlib import Path 
 
@@ -123,11 +123,10 @@ class Trainer:
             features = self._compute_features_batch(S, v, K, T, dt)
             
             # Forward pass
-            delta = self.model(features)
+            delta, y = self.model(features)
             
             # Compute P&L
-            from ..models.losses import compute_pnl
-            pnl = compute_pnl(S, delta, Z, c_prop=self.config['data']['transaction_cost']['c_prop'])
+            pnl = compute_pnl(S, delta, Z, y, c_prop=self.config['data']['transaction_cost']['c_prop'])
             
             # Compute loss
             loss = cvar_loss(pnl, alpha=self.criterion_alpha)
@@ -184,11 +183,10 @@ class Trainer:
                 features = self._compute_features_batch(S, v, K, T, dt)
                 
                 # Forward pass
-                delta = self.model(features)
+                delta, y = self.model(features)
                 
                 # Compute P&L
-                from ..models.losses import compute_pnl
-                pnl = compute_pnl(S, delta, Z, c_prop=self.config['data']['transaction_cost']['c_prop'])
+                pnl = compute_pnl(S, delta, Z, y, c_prop=self.config['data']['transaction_cost']['c_prop'])
                 
                 # Compute loss
                 loss = cvar_loss(pnl, alpha=self.criterion_alpha)
@@ -235,13 +233,15 @@ class Trainer:
                 self.lr_scheduler.step()
             
             # Print progress
-            print(f"Epoch {epoch+1}/{num_epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}")
+            y_value = self.model.y.item()
+            print(f"Epoch {epoch+1}/{num_epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}, y={y_value:.6f}")
 
             # Log metrics to TensorBoard
             if self.logger:
                 self.logger.log_metrics({
                     'train_loss': train_loss,
-                    'val_loss': val_loss
+                    'val_loss': val_loss,
+                    'learned_premium_y': y_value
                 }, step=epoch)
             
             # Early stopping

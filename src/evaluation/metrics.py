@@ -44,6 +44,7 @@ def compute_all_metrics(
     all_hedging_errors = []
     all_trading_volumes = []
     all_payoffs = []
+    y_value = None
     
     with torch.no_grad():
         for S, v, Z in tqdm(test_loader, desc="Computing metrics"):
@@ -55,10 +56,14 @@ def compute_all_metrics(
             features = _compute_features_batch(S, v, K, T, dt, device)
             
             # Forward pass
-            delta = model(features)
+            delta, y = model(features)
+            
+            # Store y value (same for all batches)
+            if y_value is None:
+                y_value = y.item()
             
             # P&L
-            pnl = compute_pnl(S, delta, Z, c_prop=config['data']['transaction_cost']['c_prop'])
+            pnl = compute_pnl(S, delta, Z, y, c_prop=config['data']['transaction_cost']['c_prop'])
             all_pnl.append(pnl.cpu().numpy())
             
             # Hedging error: |Z - integral(delta dS)|
@@ -93,6 +98,7 @@ def compute_all_metrics(
         'hedging_error_mae': float(np.mean(all_hedging_errors)),
         'total_trading_volume': float(np.mean(all_trading_volumes)),
         'mean_payoff': float(np.mean(all_payoffs)),
+        'learned_premium_y': float(y_value),
     }
     
     return metrics
@@ -203,9 +209,9 @@ def _evaluate_under_attack(
         # Evaluate on adversarial examples
         with torch.no_grad():
             features_adv = _compute_features_batch(S_adv, v_adv, K, T, dt, device)
-            delta = model(features_adv)
+            delta, y = model(features_adv)
             
-            pnl = compute_pnl(S_adv, delta, Z, c_prop=config['data']['transaction_cost']['c_prop'])
+            pnl = compute_pnl(S_adv, delta, Z, y, c_prop=config['data']['transaction_cost']['c_prop'])
             all_pnl.append(pnl.cpu().numpy())
             
             dS = S_adv[:, 1:] - S_adv[:, :-1]
@@ -254,4 +260,3 @@ def _compute_features_batch(
     features = compute_features(S, v, K, T, dt)
     
     return features
-

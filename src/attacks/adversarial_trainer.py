@@ -6,53 +6,57 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Optional, Dict
+from ..models.losses import cvar_loss, compute_pnl
+from ..attacks.fgsm import fgsm_attack
+from ..attacks.pgd import pgd_attack
+from pathlib import Path
 
-from ..models.trainer import Trainer
-from .fgsm import fgsm_attack
-from .pgd import pgd_attack
 
-
-class AdversarialTrainer(Trainer):
+class AdversarialTrainer:
     """
-    Trainer for adversarial training
-    
-    Extends the base Trainer to generate adversarial examples during training
+    Trainer for adversarial Deep Hedging
     """
     
     def __init__(
         self,
         model: nn.Module,
         config: dict,
-        attack_type: str = 'pgd',
+        attack_type: str = 'fgsm',
         device: str = 'cuda',
-        mask: Optional[Dict[str, torch.Tensor]] = None  
+        mask: Optional[Dict[str, torch.Tensor]] = None
     ):
         """
         Initialize adversarial trainer
         
         Args:
-            model: Neural network
+            model: Deep Hedging network
             config: Configuration dictionary
             attack_type: Type of attack ('fgsm' or 'pgd')
             device: Device to use
-            mask: Optional pruning mask  
+            mask: Optional pruning mask
         """
-        super().__init__(model, config, device, mask)  
-        
+        self.model = model.to(device)
+        self.config = config
         self.attack_type = attack_type
+        self.device = device
+        self.mask = mask
         
-        # Attack parameters
-        if attack_type == 'fgsm':
-            self.epsilon_S = config['attacks']['fgsm']['epsilon_S']
-            self.epsilon_v = config['attacks']['fgsm']['epsilon_v']
-        elif attack_type == 'pgd':
-            self.epsilon_S = config['attacks']['pgd']['epsilon_S']
-            self.epsilon_v = config['attacks']['pgd']['epsilon_v']
-            self.alpha_S = config['attacks']['pgd']['alpha_S']
-            self.alpha_v = config['attacks']['pgd']['alpha_v']
-            self.num_steps = config['attacks']['pgd']['num_steps']
-        else:
-            raise ValueError(f"Unknown attack type: {attack_type}")
+        # Optimizer
+        lr = config['training']['learning_rate']
+        weight_decay = config['training'].get('weight_decay', 0)
+        self.optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        
+        # Loss function
+        self.criterion_alpha = config['training'].get('cvar_alpha', 0.05)
+        
+        # Logging
+        self.train_losses = []
+        self.val_losses = []
+        self.best_val_loss = float('inf')
+        
+        # Early stopping
+        self.patience = config['training'].get('patience', 20)
+        self.patience_counter = 0
     
     def train_epoch(
         self,
@@ -63,15 +67,6 @@ class AdversarialTrainer(Trainer):
     ) -> float:
         """
         Train for one epoch with adversarial examples
-        
-        Args:
-            train_loader: Training data loader
-            K: Strike price
-            T: Time to maturity
-            dt: Time step
-            
-        Returns:
-            Average training loss
         """
         self.model.train()
         total_loss = 0.0
@@ -88,32 +83,27 @@ class AdversarialTrainer(Trainer):
                     self.model, S, v, Z,
                     lambda s, vv: self._compute_features_batch(s, vv, K, T, dt),
                     self.config,
-                    self.epsilon_S,
-                    self.epsilon_v
+                    self.config['attacks']['fgsm']['epsilon_S'],
+                    self.config['attacks']['fgsm']['epsilon_v']
                 )
-            else:  # pgd
+            elif self.attack_type == 'pgd':
                 S_adv, v_adv = pgd_attack(
                     self.model, S, v, Z,
                     lambda s, vv: self._compute_features_batch(s, vv, K, T, dt),
                     self.config,
-                    self.epsilon_S,
-                    self.epsilon_v,
-                    self.alpha_S,
-                    self.alpha_v,
-                    self.num_steps
+                    self.config['attacks']['pgd']['epsilon_S'],
+                    self.config['attacks']['pgd']['epsilon_v'],
+                    self.config['attacks']['pgd']['alpha_S'],
+                    self.config['attacks']['pgd']['alpha_v'],
+                    self.config['attacks']['pgd']['num_steps']
                 )
             
-            # Compute features on adversarial examples
-            features_adv = self._compute_features_batch(S_adv, v_adv, K, T, dt)
-            
-            # Forward pass
-            delta = self.model(features_adv)
-            
-            # Compute P&L on adversarial examples
-            from ..models.losses import compute_pnl, cvar_loss
-            pnl = compute_pnl(S_adv, delta, Z, c_prop=self.config['data']['transaction_cost']['c_prop'])
+            # Forward pass on adversarial examples
+            features = self._compute_features_batch(S_adv, v_adv, K, T, dt)
+            delta, y = self.model(features)
             
             # Compute loss
+            pnl = compute_pnl(S_adv, delta, Z, y, c_prop=self.config['data']['transaction_cost']['c_prop'])
             loss = cvar_loss(pnl, alpha=self.criterion_alpha)
             
             # Backward pass
@@ -126,7 +116,7 @@ class AdversarialTrainer(Trainer):
             # Optimizer step
             self.optimizer.step()
             
-            # Re-apply mask
+            # Re-apply mask if using sparse network
             if self.mask is not None:
                 self._apply_mask()
             
@@ -135,6 +125,77 @@ class AdversarialTrainer(Trainer):
         
         return total_loss / num_batches
     
+    def validate(
+        self,
+        val_loader: DataLoader,
+        K: float,
+        T: float,
+        dt: float
+    ) -> float:
+        """
+        Validate on clean data
+        """
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for S, v, Z in val_loader:
+                S = S.to(self.device)
+                v = v.to(self.device)
+                Z = Z.to(self.device)
+                
+                # Compute features
+                features = self._compute_features_batch(S, v, K, T, dt)
+                
+                # Forward pass
+                delta, y = self.model(features)
+                
+                # Compute loss
+                pnl = compute_pnl(S, delta, Z, y, c_prop=self.config['data']['transaction_cost']['c_prop'])
+                loss = cvar_loss(pnl, alpha=self.criterion_alpha)
+                
+                total_loss += loss.item()
+                num_batches += 1
+        
+        return total_loss / num_batches
+    
+    def fit(
+        self,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        K: float,
+        T: float,
+        dt: float
+    ) -> float:
+        """
+        Train with adversarial examples
+        """
+        num_epochs = self.config['training']['epochs']
+        
+        for epoch in range(num_epochs):
+            train_loss = self.train_epoch(train_loader, K, T, dt)
+            self.train_losses.append(train_loss)
+            
+            val_loss = self.validate(val_loader, K, T, dt)
+            self.val_losses.append(val_loss)
+            
+            # Print progress
+            y_value = self.model.y.item()
+            print(f"Epoch {epoch+1}/{num_epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}, y={y_value:.6f}")
+            
+            # Early stopping
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                self.patience_counter = 0
+                self.save_checkpoint(f'experiments/adversarial_{self.attack_type}/best_model.pt')
+            else:
+                self.patience_counter += 1
+                if self.patience_counter >= self.patience:
+                    print(f"Early stopping at epoch {epoch+1}")
+                    break
+        
+        return self.best_val_loss
     
     def fit_with_warmup(
         self,
@@ -146,71 +207,61 @@ class AdversarialTrainer(Trainer):
         epochs: int,
         lr_start: float,
         lr_end: float,
-        warmup_epochs: int = 10
+        warmup_epochs: int
     ) -> float:
         """
-        Train with learning rate warmup (for PGD retraining phase)
-        
-        Args:
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            K: Strike price
-            T: Time to maturity
-            dt: Time step
-            epochs: Total number of epochs
-            lr_start: Starting learning rate
-            lr_end: Ending learning rate
-            warmup_epochs: Number of warmup epochs
-            
-        Returns:
-            Best validation loss
+        Train with learning rate warmup
         """
-        # Override epochs
-        original_epochs = self.config['training']['epochs']
-        self.config['training']['epochs'] = epochs
-        
-        # Warmup schedule: lr_start -> lr_end (linear)
         for epoch in range(epochs):
-            # Adjust learning rate
+            # Learning rate warmup
             if epoch < warmup_epochs:
-                # Linear warmup
                 lr = lr_start + (lr_end - lr_start) * (epoch / warmup_epochs)
-            else:
-                # Constant after warmup
-                lr = lr_end
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr
             
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = lr
-            
-            # Train
             train_loss = self.train_epoch(train_loader, K, T, dt)
             self.train_losses.append(train_loss)
             
-            # Validate
             val_loss = self.validate(val_loader, K, T, dt)
             self.val_losses.append(val_loss)
             
             # Print progress
-            print(f"Epoch {epoch+1}/{epochs} (lr={lr:.6f}): train_loss={train_loss:.6f}, val_loss={val_loss:.6f}")
-
-            # Log metrics
-            if self.logger:
-                self.logger.log_metrics({
-                    'train_loss': train_loss,
-                    'val_loss': val_loss,
-                    'learning_rate': lr
-                }, step=epoch)
+            y_value = self.model.y.item()
+            print(f"Epoch {epoch+1}/{epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}, y={y_value:.6f}")
             
-            # Save best
+            # Save best model
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
-                self.save_checkpoint('experiments/adversarial_training/best_model.pt')
-        
-        # Close logger
-        if self.logger:
-            self.logger.close()
-            
-        # Restore original epochs
-        self.config['training']['epochs'] = original_epochs
+                self.save_checkpoint(f'experiments/adversarial_{self.attack_type}/best_model.pt')
         
         return self.best_val_loss
+    
+    def _compute_features_batch(
+        self,
+        S: torch.Tensor,
+        v: torch.Tensor,
+        K: float,
+        T: float,
+        dt: float
+    ) -> torch.Tensor:
+        """
+        Compute features for a batch
+        """
+        from ..data.preprocessor import compute_features
+        features = compute_features(S, v, K, T, dt)
+        return features
+    
+    def _apply_mask(self):
+        """
+        Apply pruning mask
+        """
+        for name, param in self.model.named_parameters():
+            if name in self.mask:
+                param.data *= self.mask[name].to(self.device)
+    
+    def save_checkpoint(self, filepath: str):
+        """
+        Save model checkpoint
+        """
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.model.state_dict(), filepath)

@@ -1,113 +1,85 @@
 """
-Projected Gradient Descent (PGD) attack
+PGD (Projected Gradient Descent) attack
 """
 
 import torch
-import torch.nn as nn
-from typing import Tuple
+from typing import Callable
 from ..models.losses import compute_pnl, cvar_loss
 
 
 def pgd_attack(
-    model: nn.Module,
+    model: torch.nn.Module,
     S: torch.Tensor,
     v: torch.Tensor,
     Z: torch.Tensor,
-    features_fn,
+    feature_fn: Callable,
     config: dict,
-    epsilon_S: float = 0.05,
-    epsilon_v: float = 0.5,
-    alpha_S: float = 0.01,
-    alpha_v: float = 0.1,
-    num_steps: int = 10,
-    random_start: bool = True
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    epsilon_S: float,
+    epsilon_v: float,
+    alpha_S: float,
+    alpha_v: float,
+    num_steps: int = 10
+) -> tuple:
     """
-    PGD attack on price and volatility
-    
-    Iteratively perturbs inputs to maximize CVaR loss
-    Uses MULTIPLICATIVE perturbations for financial data
+    PGD attack on stock price and variance
     
     Args:
-        model: Hedging network
+        model: Deep Hedging network
         S: Stock prices (batch, n_steps)
         v: Variances (batch, n_steps)
         Z: Payoffs (batch,)
-        features_fn: Function to compute features
-        config: Configuration dict
-        epsilon_S: Max relative perturbation on price (fraction)
-        epsilon_v: Max relative perturbation on variance (fraction)
-        alpha_S: Step size for price perturbation
-        alpha_v: Step size for volatility perturbation
+        feature_fn: Function to compute features from S, v
+        config: Configuration dictionary
+        epsilon_S: Max perturbation for S (fraction)
+        epsilon_v: Max perturbation for v (fraction)
+        alpha_S: Step size for S
+        alpha_v: Step size for v
         num_steps: Number of PGD iterations
-        random_start: Whether to start from random perturbation
         
     Returns:
-        S_adv: Adversarial prices (batch, n_steps)
-        v_adv: Adversarial variances (batch, n_steps)
+        S_adv: Adversarial stock prices
+        v_adv: Adversarial variances
     """
-    # Initialize perturbations (relative perturbations)
-    if random_start:
-        delta_S = torch.zeros_like(S).uniform_(-epsilon_S, epsilon_S)
-        delta_v = torch.zeros_like(v).uniform_(-epsilon_v, epsilon_v)
-    else:
-        delta_S = torch.zeros_like(S)
-        delta_v = torch.zeros_like(v)
+    # Initialize adversarial examples
+    S_adv = S.clone().detach()
+    v_adv = v.clone().detach()
     
-    # PGD iterations
-    for step in range(num_steps):
-        # Zero gradients explicitly
-        if delta_S.grad is not None:
-            delta_S.grad.zero_()
-        if delta_v.grad is not None:
-            delta_v.grad.zero_()
-        
-        # Enable gradients
-        delta_S.requires_grad = True
-        delta_v.requires_grad = True
-        
-        # Apply perturbations (multiplicative)
-        S_adv = S * (1 + delta_S)
-        v_adv = v * (1 + delta_v)
+    for _ in range(num_steps):
+        # Require gradients
+        S_adv.requires_grad = True
+        v_adv.requires_grad = True
         
         # Forward pass
-        features = features_fn(S_adv, v_adv)
-        delta_hedge = model(features)
+        features = feature_fn(S_adv, v_adv)
+        delta, y = model(features)
         
-        # Compute P&L
-        pnl = compute_pnl(S_adv, delta_hedge, Z, c_prop=config['data']['transaction_cost']['c_prop'])
+        # Compute loss
+        pnl = compute_pnl(S_adv, delta, Z, y, c_prop=config['data']['transaction_cost']['c_prop'])
+        loss = cvar_loss(pnl, alpha=config['training']['cvar_alpha'])
         
-        # Loss: maximize CVaR loss = minimize P&L
-        loss = -cvar_loss(pnl, alpha=config['training']['cvar_alpha'])
+        # Zero gradients
+        model.zero_grad()
+        if S_adv.grad is not None:
+            S_adv.grad.zero_()
+        if v_adv.grad is not None:
+            v_adv.grad.zero_()
         
         # Backward pass
         loss.backward()
         
-        # Gradient ascent step
-        with torch.no_grad():
-            delta_S = delta_S + alpha_S * delta_S.grad.sign()
-            delta_v = delta_v + alpha_v * delta_v.grad.sign()
-            
-            # Project into epsilon-ball
-            delta_S = torch.clamp(delta_S, -epsilon_S, epsilon_S)
-            delta_v = torch.clamp(delta_v, -epsilon_v, epsilon_v)
-            
-            # Ensure validity (price and variance > 0)
-            S_temp = S * (1 + delta_S)
-            v_temp = v * (1 + delta_v)
-            S_temp = torch.clamp(S_temp, 1e-6, None)
-            v_temp = torch.clamp(v_temp, 1e-6, None)
-            
-            # Recompute deltas to respect positivity constraint
-            delta_S = S_temp / S - 1
-            delta_v = v_temp / v - 1
+        # Get gradients
+        grad_S = S_adv.grad.data
+        grad_v = v_adv.grad.data
         
-        # Detach for next iteration
-        delta_S = delta_S.detach()
-        delta_v = delta_v.detach()
+        # PGD update
+        S_adv = S_adv.detach() + alpha_S * S * grad_S.sign()
+        v_adv = v_adv.detach() + alpha_v * v * grad_v.sign()
+        
+        # Project back to epsilon-ball
+        S_adv = torch.clamp(S_adv, min=S * (1 - epsilon_S), max=S * (1 + epsilon_S))
+        v_adv = torch.clamp(v_adv, min=v * (1 - epsilon_v), max=v * (1 + epsilon_v))
+        
+        # Ensure positivity of variance
+        v_adv = torch.clamp(v_adv, min=1e-6)
     
-    # Final adversarial examples
-    S_adv = S * (1 + delta_S)
-    v_adv = v * (1 + delta_v)
-    
-    return S_adv, v_adv
+    return S_adv.detach(), v_adv.detach()

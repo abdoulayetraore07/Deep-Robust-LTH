@@ -17,6 +17,8 @@ from src.utils.config import load_config, get_device
 from src.models.deep_hedging import DeepHedgingNetwork
 from src.models.trainer import Trainer
 from src.data.preprocessor import create_dataloaders
+from src.evaluation.metrics import compute_all_metrics
+from src.evaluation.baselines import delta_hedging_baseline
 
 
 def main():
@@ -86,15 +88,15 @@ def main():
     best_val_loss = trainer.fit(train_loader, val_loader, K, T, dt)
     
     print(f"Training complete. Best validation loss: {best_val_loss:.6f}")
+    print(f"Learned premium (y): {model.y.item():.6f}")
     
     # Evaluate on test set
     print("Evaluating on test set...")
-    from src.evaluation.metrics import compute_all_metrics
     
     trainer.load_checkpoint('experiments/baseline/best_model.pt')
     metrics = compute_all_metrics(model, test_loader, config, K, T, dt, device)
     
-    print("Test metrics:")
+    print("\nTest metrics:")
     for key, value in metrics.items():
         print(f"  {key}: {value:.6f}")
     
@@ -103,7 +105,38 @@ def main():
         json.dump(metrics, f, indent=2)
     
     print(f"Metrics saved to {output_dir / 'metrics.json'}")
-    print("Baseline training complete")
+    
+    # Compare with Delta Hedging baseline
+    print("\n" + "="*60)
+    print("Delta Hedging Baseline")
+    print("="*60)
+    
+    r = config['data']['heston']['r']
+    delta_metrics = delta_hedging_baseline(
+        S_test, v_test, Z_test, K, T, r, dt,
+        c_prop=config['data']['transaction_cost']['c_prop']
+    )
+    
+    print("\nDelta Hedging metrics:")
+    for key, value in delta_metrics.items():
+        print(f"  {key}: {value:.6f}")
+    
+    # Save delta metrics
+    with open(output_dir / 'delta_hedging_metrics.json', 'w') as f:
+        json.dump(delta_metrics, f, indent=2)
+    
+    # Comparison table
+    print("\n" + "="*60)
+    print("COMPARISON")
+    print("="*60)
+    print(f"{'Metric':<30} {'Deep Hedging':<20} {'Delta Hedging':<20}")
+    print("-"*70)
+    for key in ['mean_pnl', 'cvar_005', 'hedging_error_rmse', 'total_trading_volume']:
+        dh_val = metrics.get(key, 0.0)
+        bs_val = delta_metrics.get(key, 0.0)
+        print(f"{key:<30} {dh_val:<20.6f} {bs_val:<20.6f}")
+    
+    print("\nBaseline training complete")
 
 
 if __name__ == '__main__':
