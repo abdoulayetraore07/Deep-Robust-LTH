@@ -50,7 +50,7 @@ model:
 training:
   # Optimizer
   optimizer_name: adam
-  learning_rate: 0.001
+  learning_rate: 0.0001
   weight_decay: 0.00001
   momentum: 0.9              # For SGD
   
@@ -59,7 +59,7 @@ training:
   warmup_steps: 0
   
   # Training duration
-  epochs: 100
+  epochs: 200
   batch_size: 256
   
   # Early stopping

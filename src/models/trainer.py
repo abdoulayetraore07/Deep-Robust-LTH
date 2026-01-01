@@ -69,10 +69,10 @@ class Trainer:
         self.device = device
         self.mask = mask 
         
-        # Optimizer and scheduler
+        # Optimizer (same LR for all parameters, like Buehler)
         self.optimizer = get_optimizer(model, config['training'])
         self.lr_scheduler = get_lr_schedule(self.optimizer, config['training'])
-        
+ 
         # Loss function
         self.criterion_alpha = config['training'].get('cvar_alpha', 0.05)
         

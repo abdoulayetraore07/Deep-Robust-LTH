@@ -19,6 +19,7 @@ from src.models.trainer import Trainer
 from src.data.preprocessor import create_dataloaders
 from src.evaluation.metrics import compute_all_metrics
 from src.evaluation.baselines import delta_hedging_baseline
+from src.evaluation.baselines import black_scholes_price
 
 
 def main():
@@ -107,24 +108,37 @@ def main():
     print(f"Metrics saved to {output_dir / 'metrics.json'}")
     
     # Compare with Delta Hedging baseline
-    print("\n" + "="*60)
-    print("Delta Hedging Baseline")
-    print("="*60)
-    
+    print("Computing Delta Hedging baseline...")
+
     r = config['data']['heston']['r']
     delta_metrics = delta_hedging_baseline(
         S_test, v_test, Z_test, K, T, r, dt,
         c_prop=config['data']['transaction_cost']['c_prop']
     )
-    
+
     print("\nDelta Hedging metrics:")
     for key, value in delta_metrics.items():
         print(f"  {key}: {value:.6f}")
-    
+
     # Save delta metrics
     with open(output_dir / 'delta_hedging_metrics.json', 'w') as f:
         json.dump(delta_metrics, f, indent=2)
-    
+
+    # Black-Scholes price
+
+    S_0 = config['data']['heston']['S_0']
+    v_0 = config['data']['heston']['v_0']
+    sigma_bs = np.sqrt(v_0)
+
+    bs_price = black_scholes_price(S_0, K, T, r, sigma_bs)
+
+    print("\n" + "="*60)
+    print("PREMIUM COMPARISON")
+    print("="*60)
+    print(f"Learned premium (y):     {model.y.item():.6f}")
+    print(f"Black-Scholes price:     {bs_price:.6f}")
+    print(f"Difference (y - BS):     {model.y.item() - bs_price:.6f}")
+
     # Comparison table
     print("\n" + "="*60)
     print("COMPARISON")
@@ -135,7 +149,7 @@ def main():
         dh_val = metrics.get(key, 0.0)
         bs_val = delta_metrics.get(key, 0.0)
         print(f"{key:<30} {dh_val:<20.6f} {bs_val:<20.6f}")
-    
+
     print("\nBaseline training complete")
 
 

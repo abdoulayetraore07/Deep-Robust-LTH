@@ -115,6 +115,24 @@ def delta_hedging_baseline(
     return metrics
 
 
+def black_scholes_price(
+    S0: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float
+) -> float:
+    """
+    Black-Scholes call option price
+    """
+    d1 = (np.log(S0 / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    call_price = S0 * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    
+    return call_price
+
+
 def no_hedging_baseline(
     Z: np.ndarray
 ) -> dict:
