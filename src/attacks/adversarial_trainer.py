@@ -2,13 +2,13 @@
 Adversarial Training for Deep Hedging
 
 Implements adversarial training following Madry et al. (2018):
-    min_θ E_{(x,y)} [max_{δ∈Δ} L(f_θ(x + δ), y)]
+    min_Î¸ E_{(x,y)} [max_{Î´âˆˆÎ”} L(f_Î¸(x + Î´), y)]
 
 Supports multiple training modes:
 1. Standard training (no adversarial)
 2. FGSM adversarial training (fast, weak)
 3. PGD adversarial training (slow, strong)
-4. Curriculum adversarial training (increasing ε)
+4. Curriculum adversarial training (increasing Îµ)
 5. Mixed training (clean + adversarial batches)
 
 Key insight from "Boosting Tickets" paper:
@@ -39,7 +39,7 @@ class AdversarialTrainer:
     - 'none': Standard training
     - 'fgsm': FGSM adversarial training
     - 'pgd': PGD adversarial training
-    - 'curriculum': Gradually increasing ε
+    - 'curriculum': Gradually increasing Îµ
     - 'mixed': Mix of clean and adversarial examples
     """
     
@@ -71,6 +71,11 @@ class AdversarialTrainer:
         self.weight_decay = train_config.get('weight_decay', 0.0)
         self.grad_clip = train_config.get('gradient_clip', 1.0)
         self.patience = train_config.get('patience', 20)
+        
+        # Alpha for CVaR monitoring (independent of loss function)
+        # This ensures we can always compute CVaR metrics for comparison,
+        # regardless of which loss function is used for training
+        self.monitoring_alpha = train_config.get('cvar_alpha', 0.05)
         
         # Adversarial config
         adv_config = config.get('adversarial', {})
@@ -299,6 +304,9 @@ class AdversarialTrainer:
         """
         Validate model on clean and adversarial data.
         
+        This method is loss-agnostic: it works with any loss function
+        by using monitoring_alpha from config for CVaR computation.
+        
         Args:
             val_loader: Validation data loader
             include_adversarial: Whether to also evaluate adversarial robustness
@@ -348,8 +356,8 @@ class AdversarialTrainer:
             
             n_batches += 1
         
-        # Compute CVaR
-        alpha = self.loss_fn.alpha
+        # Compute CVaR using monitoring_alpha (from config, not from loss)
+        alpha = self.monitoring_alpha
         all_pnls_clean = torch.cat(all_pnls_clean)
         sorted_pnls, _ = torch.sort(all_pnls_clean)
         var_idx = int(alpha * len(sorted_pnls))
@@ -440,7 +448,7 @@ class AdversarialTrainer:
                 log_str += f" | Gap: {val_metrics['val_robustness_gap']:.4f}"
             
             if self.adv_mode == 'curriculum':
-                log_str += f" | ε: {self._get_current_epsilon():.4f}"
+                log_str += f" | Îµ: {self._get_current_epsilon():.4f}"
             
             log_str += f" | Time: {metrics['epoch_time']:.1f}s{improved}"
             print(log_str)

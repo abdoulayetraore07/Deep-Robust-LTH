@@ -9,19 +9,53 @@ The premium y only appears in the loss function, not in the P&L itself.
 OCE Formulation:
     U(X) = sup_y { E[u(X + y)] - y }
     
-    For CVaR with level α:
-        u(x) = (1 + λ) * min(0, x)    where λ = 1/α - 1
+    For CVaR with level Î±:
+        u(x) = (1 + Î») * min(0, x)    where Î» = 1/Î± - 1
         
     Loss = -U(X) = y - E[u(PnL + y)]
-         = y + (1/α) * E[max(-PnL - y, 0)]
+         = y + (1/Î±) * E[max(-PnL - y, 0)]
 
 P&L Calculation (for SHORT option position):
-    PnL = Σ δ_{t-1} * (S_t - S_{t-1}) - Z - transaction_costs
+    PnL = Î£ Î´_{t-1} * (S_t - S_{t-1}) - Z - transaction_costs
     
     Where:
-        - δ_{t-1} * (S_t - S_{t-1}): hedging gains
+        - Î´_{t-1} * (S_t - S_{t-1}): hedging gains
         - Z: option payoff (positive for short position loss)
-        - transaction_costs: proportional to |δ_t - δ_{t-1}|
+        - transaction_costs: proportional to |Î´_t - Î´_{t-1}|
+
+=============================================================================
+LOSS FUNCTION INTERFACE CONTRACT
+=============================================================================
+
+All loss functions must implement the following interface to be compatible
+with the Trainer and AdversarialTrainer classes:
+
+1. forward(deltas, S, Z, y, dt) -> Tuple[loss, info]
+   - deltas: Hedging positions (batch, n_steps)
+   - S: Stock prices (batch, n_steps)
+   - Z: Option payoff at maturity (batch,)
+   - y: Learned premium (scalar tensor)
+   - dt: Time step size (float)
+   - Returns: (loss scalar, info dict)
+
+2. compute_pnl(deltas, S, Z, dt) -> pnl
+   - Same inputs as forward (minus y)
+   - Returns: P&L for each path (batch,)
+
+3. info dict REQUIRED fields:
+   - 'pnl_mean': Mean P&L across batch
+   - 'pnl_std': Std of P&L across batch
+   - 'premium_y': The premium parameter y
+
+4. info dict OPTIONAL fields (recommended for consistency):
+   - 'pnl_min': Minimum P&L
+   - 'pnl_max': Maximum P&L
+   - 'expected_shortfall': (OCELoss specific)
+   - 'cvar': (OCELoss specific)
+
+Note: The Trainer computes CVaR for monitoring using config['training']['cvar_alpha'],
+NOT from the loss function. This allows consistent monitoring across all loss types.
+=============================================================================
 """
 
 import torch
@@ -35,7 +69,7 @@ class OCELoss(nn.Module):
     
     This implements the correct OCE formulation where:
     1. P&L is computed WITHOUT the premium y
-    2. Loss = y + (1/α) * E[max(-PnL - y, 0)]
+    2. Loss = y + (1/Î±) * E[max(-PnL - y, 0)]
     
     The network learns both the hedging strategy AND the optimal premium.
     """
@@ -60,7 +94,7 @@ class OCELoss(nn.Module):
         self.transaction_cost = transaction_cost
         self.risk_free_rate = risk_free_rate
         
-        # Lambda for CVaR utility: λ = 1/α - 1
+        # Lambda for CVaR utility: Î» = 1/Î± - 1
         self.lam = 1.0 / alpha - 1.0
     
     def compute_pnl(
@@ -74,7 +108,7 @@ class OCELoss(nn.Module):
         Compute P&L for SHORT option position (WITHOUT premium y).
         
         PnL = hedging_gains - option_payoff - transaction_costs
-            = Σ δ_{t-1} * (S_t - S_{t-1}) - Z - TC
+            = Î£ Î´_{t-1} * (S_t - S_{t-1}) - Z - TC
         
         Args:
             deltas: Hedging positions (batch, n_steps)
@@ -92,21 +126,21 @@ class OCELoss(nn.Module):
         # Stock price changes: dS_t = S_t - S_{t-1}
         dS = S[:, 1:] - S[:, :-1]  # (batch, n_steps - 1)
         
-        # Hedging gains: Σ δ_{t-1} * dS_t
+        # Hedging gains: Î£ Î´_{t-1} * dS_t
         # Use delta from previous step (delta_{t-1}) for gain at step t
         delta_prev = deltas[:, :-1]  # (batch, n_steps - 1)
         hedging_gains = (delta_prev * dS).sum(dim=1)  # (batch,)
         
-        # Transaction costs: Σ |δ_t - δ_{t-1}| * cost * S_t
+        # Transaction costs: Î£ |Î´_t - Î´_{t-1}| * cost * S_t
         if self.transaction_cost > 0:
-            # Initial trade: |δ_0 - 0| = |δ_0|
+            # Initial trade: |Î´_0 - 0| = |Î´_0|
             initial_trade = torch.abs(deltas[:, 0]) * S[:, 0]
             
-            # Subsequent trades: |δ_t - δ_{t-1}|
+            # Subsequent trades: |Î´_t - Î´_{t-1}|
             delta_changes = torch.abs(deltas[:, 1:] - deltas[:, :-1])
             subsequent_trades = (delta_changes * S[:, 1:]).sum(dim=1)
             
-            # Final unwind: |0 - δ_{T-1}| = |δ_{T-1}|
+            # Final unwind: |0 - Î´_{T-1}| = |Î´_{T-1}|
             final_trade = torch.abs(deltas[:, -1]) * S[:, -1]
             
             total_tc = self.transaction_cost * (initial_trade + subsequent_trades + final_trade)
@@ -121,7 +155,7 @@ class OCELoss(nn.Module):
     
     def cvar_utility(self, x: torch.Tensor) -> torch.Tensor:
         """
-        CVaR utility function: u(x) = (1 + λ) * min(0, x)
+        CVaR utility function: u(x) = (1 + Î») * min(0, x)
         
         Args:
             x: Input values (batch,)
@@ -143,7 +177,7 @@ class OCELoss(nn.Module):
         Compute OCE Loss.
         
         Loss = y - E[u(PnL + y)]
-             = y + (1/α) * E[max(-PnL - y, 0)]
+             = y + (1/Î±) * E[max(-PnL - y, 0)]
         
         Args:
             deltas: Hedging positions (batch, n_steps)
@@ -159,8 +193,8 @@ class OCELoss(nn.Module):
         # Compute P&L WITHOUT premium
         pnl = self.compute_pnl(deltas, S, Z, dt)
         
-        # OCE Loss = y + (1/α) * E[max(-PnL - y, 0)]
-        # Equivalent to: y - E[u(PnL + y)] where u(x) = (1+λ)*min(0,x)
+        # OCE Loss = y + (1/Î±) * E[max(-PnL - y, 0)]
+        # Equivalent to: y - E[u(PnL + y)] where u(x) = (1+Î»)*min(0,x)
         shortfall = torch.clamp(-pnl - y, min=0.0)  # max(-PnL - y, 0)
         expected_shortfall = shortfall.mean()
         
@@ -175,7 +209,7 @@ class OCELoss(nn.Module):
                 'pnl_max': pnl.max(),
                 'premium_y': y,
                 'expected_shortfall': expected_shortfall,
-                'cvar': -y.item(),  # CVaR ≈ -y at optimum
+                'cvar': -y.item(),  # CVaR â‰ˆ -y at optimum
             }
         
         return loss, info
@@ -185,9 +219,9 @@ class EntropicRiskLoss(nn.Module):
     """
     Entropic Risk Measure Loss (alternative to CVaR).
     
-    u(x) = 1 - exp(-λx)
+    u(x) = 1 - exp(-Î»x)
     
-    Loss = (1/λ) * log(E[exp(-λ * (PnL + y))]) - y
+    Loss = (1/Î») * log(E[exp(-Î» * (PnL + y))]) - y
     """
     
     def __init__(
@@ -199,7 +233,7 @@ class EntropicRiskLoss(nn.Module):
         Initialize Entropic Risk Loss.
         
         Args:
-            risk_aversion: Risk aversion parameter λ
+            risk_aversion: Risk aversion parameter Î»
             transaction_cost: Proportional transaction cost
         """
         super(EntropicRiskLoss, self).__init__()
@@ -246,7 +280,7 @@ class EntropicRiskLoss(nn.Module):
         """
         Compute Entropic Risk Loss.
         
-        Loss = (1/λ) * log(E[exp(-λ * (PnL + y))]) - y
+        Loss = (1/Î») * log(E[exp(-Î» * (PnL + y))]) - y
         """
         pnl = self.compute_pnl(deltas, S, Z, dt)
         
@@ -259,6 +293,8 @@ class EntropicRiskLoss(nn.Module):
             info = {
                 'pnl_mean': pnl.mean(),
                 'pnl_std': pnl.std(),
+                'pnl_min': pnl.min(),
+                'pnl_max': pnl.max(),
                 'premium_y': y,
             }
         
@@ -288,7 +324,7 @@ def create_loss_function(config: Dict) -> nn.Module:
             transaction_cost=tc,
             risk_free_rate=rf
         )
-        print(f"[Loss] Created OCELoss (CVaR α={alpha}, TC={tc})")
+        print(f"[Loss] Created OCELoss (CVaR Î±={alpha}, TC={tc})")
         
     elif loss_type == 'entropic':
         lam = training_config.get('risk_aversion', 1.0)
@@ -298,7 +334,7 @@ def create_loss_function(config: Dict) -> nn.Module:
             risk_aversion=lam,
             transaction_cost=tc
         )
-        print(f"[Loss] Created EntropicRiskLoss (λ={lam}, TC={tc})")
+        print(f"[Loss] Created EntropicRiskLoss (Î»={lam}, TC={tc})")
     
     return loss_fn
 

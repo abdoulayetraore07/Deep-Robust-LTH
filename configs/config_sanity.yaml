@@ -58,7 +58,7 @@ training:
   batch_size: 8192    # Grand batch size pour accélérer l'entraînement
   
   loss_type: "entropic"
-  risk_aversion: 0.1
+  risk_aversion: 0.0001
   cvar_alpha: 0.05
   
   patience: 50

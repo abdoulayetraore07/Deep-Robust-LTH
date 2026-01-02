@@ -68,6 +68,11 @@ class Trainer:
         self.patience = train_config.get('patience', 20)
         self.min_delta = train_config.get('min_delta', 1e-6)
         
+        # Alpha for CVaR monitoring (independent of loss function)
+        # This ensures we can always compute CVaR metrics for comparison,
+        # regardless of which loss function is used for training
+        self.monitoring_alpha = train_config.get('cvar_alpha', 0.05)
+        
         # Extract Heston config for dt calculation
         heston_config = config['data']['heston']
         self.T = config['data']['T']
@@ -171,6 +176,11 @@ class Trainer:
         """
         Validate the model.
         
+        This method is loss-agnostic: it works with any loss function
+        (OCELoss, EntropicRiskLoss, or future losses) by:
+        1. Using monitoring_alpha from config for CVaR computation
+        2. Using .get() for optional info fields
+        
         Args:
             val_loader: Validation data loader
             
@@ -206,9 +216,10 @@ class Trainer:
             pnl = self.loss_fn.compute_pnl(deltas, S, Z, self.dt)
             all_pnls.append(pnl.cpu())
         
-        # Compute CVaR from all P&Ls
+        # Compute CVaR from all P&Ls using monitoring_alpha (from config)
+        # This works regardless of which loss function is used
         all_pnls = torch.cat(all_pnls)
-        alpha = self.loss_fn.alpha
+        alpha = self.monitoring_alpha
         sorted_pnls, _ = torch.sort(all_pnls)
         var_idx = int(alpha * len(sorted_pnls))
         cvar = sorted_pnls[:max(var_idx, 1)].mean().item()
