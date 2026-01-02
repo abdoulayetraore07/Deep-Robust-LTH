@@ -1,5 +1,2 @@
-"""
-Deep Hedging with Lottery Tickets and Adversarial Robustness
-"""
-
+# Peut rester vide
 __version__ = "1.0.0"

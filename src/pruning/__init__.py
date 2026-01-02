@@ -1,5 +1,3 @@
-"""Lottery Ticket Hypothesis pruning modules."""
-
-from src.pruning.masks import MaskManager
-from src.pruning.magnitude import MagnitudePruner, IterativeMagnitudePruning, create_pruner
-from src.pruning.rewind import WeightRewinder, RewindScheduler, create_rewind_scheduler
+from .magnitude import MagnitudePruner, create_pruner
+from .masks import MaskManager, apply_mask_to_model
+from .rewind import WeightRewinder
