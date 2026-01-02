@@ -1,35 +1,46 @@
 """
 Feature engineering and data preprocessing
+
+IMPORTANT: This module computes ONLY exogenous market features.
+Recurrent features (delta_prev, trading_volume, pnl_cumulative) are 
+computed during the forward pass in the model, NOT here.
+
+Exogenous features (5):
+    1. log(S_t / K)           - Log-moneyness
+    2. (S_t - S_{t-1})/S_{t-1} - Return
+    3. sqrt(v_t)              - Volatility
+    4. v_t - v_{t-1}          - Variance change
+    5. (T - t*dt) / T         - Normalized time to maturity
 """
 
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
+
+# Number of exogenous features
+N_EXOGENOUS_FEATURES = 5
 
 
 def compute_features(
-    S,  # Accepte np.ndarray OU torch.Tensor
-    v,  # Accepte np.ndarray OU torch.Tensor
+    S: Union[np.ndarray, torch.Tensor],
+    v: Union[np.ndarray, torch.Tensor],
     K: float,
     T: float,
-    dt: float,
-    delta_prev=None,
-    pnl_prev=None
-):
+    dt: float
+) -> Union[np.ndarray, torch.Tensor]:
     """
-    Compute 8 features from Heston paths
-    Détecte automatiquement numpy vs torch et compute sur GPU si possible
+    Compute exogenous market features from Heston paths.
     
-    Features:
-    1. log(S_t / K) - log-moneyness
-    2. (S_t - S_{t-1})/S_{t-1} - return
-    3. sqrt(v_t) - volatility
-    4. v_t - v_{t-1} - variance change
-    5. (T - t*dt) / T - time to maturity
-    6. delta_{t-1} - previous position
-    7. |delta_t - delta_{t-1}| - trading volume
-    8. PnL_{t-1} - cumulative P&L
+    These are the 5 features that do NOT depend on the model's actions:
+        1. log(S_t / K)           - Log-moneyness
+        2. (S_t - S_{t-1})/S_{t-1} - Return (0 at t=0)
+        3. sqrt(v_t)              - Volatility
+        4. v_t - v_{t-1}          - Variance change (0 at t=0)
+        5. (T - t*dt) / T         - Normalized time to maturity
+    
+    Note: Recurrent features (delta_prev, trading_volume, pnl_cumulative)
+    are computed in the model's forward pass, NOT here.
     
     Args:
         S: Stock prices (n_paths, n_steps) - numpy array OR torch tensor
@@ -37,81 +48,103 @@ def compute_features(
         K: Strike price
         T: Time to maturity
         dt: Time step
-        delta_prev: Previous positions (n_paths, n_steps), optional
-        pnl_prev: Cumulative P&L (n_paths, n_steps), optional
         
     Returns:
-        features: (n_paths, n_steps, 8) - same type as input (numpy or torch)
+        features: (n_paths, n_steps, 5) - same type as input
     """
-    # Détection automatique du type
     is_torch = isinstance(S, torch.Tensor)
     
     if is_torch:
-
-        device = S.device
-        n_paths, n_steps = S.shape
-        features = torch.zeros(n_paths, n_steps, 8, device=device, dtype=S.dtype)
-        
-        # Feature 1: Log-moneyness
-        features[:, :, 0] = torch.log(S / K)
-        
-        # Feature 2: Return
-        features[:, 1:, 1] = (S[:, 1:] - S[:, :-1]) / S[:, :-1]
-        
-        # Feature 3: Volatility (sqrt of variance)
-        features[:, :, 2] = torch.sqrt(v)
-        
-        # Feature 4: Variance change
-        features[:, 1:, 3] = v[:, 1:] - v[:, :-1]
-        
-        # Feature 5: Time to maturity
-        for t in range(n_steps):
-            features[:, t, 4] = (T - t * dt) / T
-        
-        # Feature 6: Previous delta
-        if delta_prev is not None:
-            features[:, :, 5] = delta_prev
-        
-        # Feature 7: Trading volume (computed during training)
-        # Will be filled during forward pass
-        
-        # Feature 8: Cumulative PnL
-        if pnl_prev is not None:
-            features[:, :, 7] = pnl_prev
-            
+        return _compute_features_torch(S, v, K, T, dt)
     else:
-       
-        n_paths, n_steps = S.shape
-        features = np.zeros((n_paths, n_steps, 8))
+        return _compute_features_numpy(S, v, K, T, dt)
+
+
+def _compute_features_torch(
+    S: torch.Tensor,
+    v: torch.Tensor,
+    K: float,
+    T: float,
+    dt: float
+) -> torch.Tensor:
+    """
+    Compute features using PyTorch (GPU-compatible).
+    
+    Args:
+        S: Stock prices (n_paths, n_steps)
+        v: Variances (n_paths, n_steps)
+        K: Strike price
+        T: Time to maturity
+        dt: Time step
         
-        for t in range(n_steps):
-            # Feature 1: Log-moneyness
-            features[:, t, 0] = np.log(S[:, t] / K)
-            
-            # Feature 2: Return
-            if t > 0:
-                features[:, t, 1] = (S[:, t] - S[:, t-1]) / S[:, t-1]
-            
-            # Feature 3: Volatility (sqrt of variance)
-            features[:, t, 2] = np.sqrt(v[:, t])
-            
-            # Feature 4: Variance change
-            if t > 0:
-                features[:, t, 3] = v[:, t] - v[:, t-1]
-            
-            # Feature 5: Time to maturity
-            features[:, t, 4] = (T - t * dt) / T
-            
-            # Feature 6: Previous delta
-            if delta_prev is not None:
-                features[:, t, 5] = delta_prev[:, t]
-            
-            # Feature 7: Trading volume (computed during training)
-            # Will be filled during forward pass
-            
-            # Feature 8: Cumulative PnL
-            if pnl_prev is not None:
-                features[:, t, 7] = pnl_prev[:, t]
+    Returns:
+        features: (n_paths, n_steps, 5)
+    """
+    device = S.device
+    dtype = S.dtype
+    n_paths, n_steps = S.shape
+    
+    features = torch.zeros(n_paths, n_steps, N_EXOGENOUS_FEATURES, 
+                          device=device, dtype=dtype)
+    
+    # Feature 1: Log-moneyness
+    features[:, :, 0] = torch.log(S / K)
+    
+    # Feature 2: Return (0 at t=0)
+    features[:, 1:, 1] = (S[:, 1:] - S[:, :-1]) / S[:, :-1]
+    
+    # Feature 3: Volatility (sqrt of variance)
+    features[:, :, 2] = torch.sqrt(torch.clamp(v, min=1e-8))
+    
+    # Feature 4: Variance change (0 at t=0)
+    features[:, 1:, 3] = v[:, 1:] - v[:, :-1]
+    
+    # Feature 5: Normalized time to maturity
+    time_steps = torch.arange(n_steps, device=device, dtype=dtype)
+    features[:, :, 4] = (T - time_steps * dt) / T
+    
+    return features
+
+
+def _compute_features_numpy(
+    S: np.ndarray,
+    v: np.ndarray,
+    K: float,
+    T: float,
+    dt: float
+) -> np.ndarray:
+    """
+    Compute features using NumPy.
+    
+    Args:
+        S: Stock prices (n_paths, n_steps)
+        v: Variances (n_paths, n_steps)
+        K: Strike price
+        T: Time to maturity
+        dt: Time step
+        
+    Returns:
+        features: (n_paths, n_steps, 5)
+    """
+    n_paths, n_steps = S.shape
+    
+    features = np.zeros((n_paths, n_steps, N_EXOGENOUS_FEATURES))
+    
+    # Feature 1: Log-moneyness
+    features[:, :, 0] = np.log(S / K)
+    
+    # Feature 2: Return (0 at t=0)
+    features[:, 1:, 1] = (S[:, 1:] - S[:, :-1]) / S[:, :-1]
+    
+    # Feature 3: Volatility (sqrt of variance)
+    features[:, :, 2] = np.sqrt(np.maximum(v, 1e-8))
+    
+    # Feature 4: Variance change (0 at t=0)
+    features[:, 1:, 3] = v[:, 1:] - v[:, :-1]
+    
+    # Feature 5: Normalized time to maturity
+    for t in range(n_steps):
+        features[:, t, 4] = (T - t * dt) / T
     
     return features
 
@@ -127,10 +160,14 @@ def create_dataloaders(
     v_test: np.ndarray,
     Z_test: np.ndarray,
     batch_size: int,
-    num_workers: int = 4
+    num_workers: int = 0,
+    pin_memory: bool = True
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
-    Create PyTorch DataLoaders from numpy arrays
+    Create PyTorch DataLoaders from numpy arrays.
+    
+    Note: We pass raw S, v, Z to the dataloader. Features are computed
+    on-the-fly in the training loop (on GPU if available).
     
     Args:
         S_train, v_train, Z_train: Training data
@@ -138,6 +175,7 @@ def create_dataloaders(
         S_test, v_test, Z_test: Test data
         batch_size: Batch size
         num_workers: Number of workers for data loading
+        pin_memory: Pin memory for faster GPU transfer
         
     Returns:
         train_loader, val_loader, test_loader
@@ -161,12 +199,14 @@ def create_dataloaders(
     test_dataset = TensorDataset(S_test_t, v_test_t, Z_test_t)
     
     # Create dataloaders
+    # Note: num_workers=0 is often faster for small datasets on GPU
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=pin_memory,
+        drop_last=False
     )
     
     val_loader = DataLoader(
@@ -174,7 +214,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=pin_memory
     )
     
     test_loader = DataLoader(
@@ -182,7 +222,7 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=pin_memory
     )
     
     return train_loader, val_loader, test_loader
@@ -194,7 +234,7 @@ def normalize_features(
     std: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Normalize features to zero mean and unit variance
+    Normalize features to zero mean and unit variance.
     
     Args:
         features: (n_paths, n_steps, n_features)
@@ -216,3 +256,48 @@ def normalize_features(
     normalized = (features - mean) / std
     
     return normalized, mean, std
+
+
+def get_feature_names() -> list:
+    """
+    Get names of the exogenous features.
+    
+    Returns:
+        List of feature names
+    """
+    return [
+        'log_moneyness',    # log(S/K)
+        'return',           # (S_t - S_{t-1}) / S_{t-1}
+        'volatility',       # sqrt(v)
+        'variance_change',  # v_t - v_{t-1}
+        'time_to_maturity'  # (T - t*dt) / T
+    ]
+
+
+def describe_features(features: Union[np.ndarray, torch.Tensor]) -> dict:
+    """
+    Compute descriptive statistics for features.
+    
+    Args:
+        features: (n_paths, n_steps, n_features)
+        
+    Returns:
+        Dictionary with statistics per feature
+    """
+    if isinstance(features, torch.Tensor):
+        features = features.cpu().numpy()
+    
+    feature_names = get_feature_names()
+    stats = {}
+    
+    for i, name in enumerate(feature_names):
+        f = features[:, :, i].flatten()
+        stats[name] = {
+            'mean': float(np.mean(f)),
+            'std': float(np.std(f)),
+            'min': float(np.min(f)),
+            'max': float(np.max(f)),
+            'median': float(np.median(f))
+        }
+    
+    return stats

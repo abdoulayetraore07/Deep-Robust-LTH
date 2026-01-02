@@ -1,14 +1,5 @@
-"""
-Deep Hedging models and loss functions
-"""
+"""Deep Hedging models and training."""
 
-from .deep_hedging import DeepHedgingNetwork
-from .losses import compute_pnl, cvar_loss
-from .trainer import Trainer
-
-__all__ = [
-    'DeepHedgingNetwork',
-    'compute_pnl',
-    'cvar_loss',
-    'Trainer',
-]
+from src.models.deep_hedging import DeepHedgingNetwork, create_model
+from src.models.losses import OCELoss, create_loss_function
+from src.models.trainer import Trainer, load_trained_model

@@ -1,6 +1,5 @@
 """
-Deep Robust LTH Project
-Adversarially-Robust Sparse Deep Hedging
+Deep Hedging with Lottery Tickets and Adversarial Robustness
 """
 
-__version__ = '0.1.0'
+__version__ = "1.0.0"

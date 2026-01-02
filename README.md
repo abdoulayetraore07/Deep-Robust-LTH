@@ -2,170 +2,139 @@
 
 **Finding Lottery Tickets that Survive Market Stress**
 
----
+Research project combining:
+- **Deep Hedging** (Buehler et al., 2019)
+- **Lottery Ticket Hypothesis** (Frankle & Carlin, 2019)
+- **Adversarial Robustness** (Madry et al., 2017)
 
-## Project Overview
+## Project Structure
 
-This project investigates the intersection of three cutting-edge machine learning concepts:
+```
+├── config.yaml              # Configuration file
+├── requirements.txt         # Dependencies
+├── run_baseline.py          # Baseline Deep Hedging
+├── run_lth.py               # Lottery Ticket experiments
+├── run_adversarial.py       # Adversarial training
+├── run_full_experiment.py   # Complete pipeline
+│
+└── src/
+    ├── data/
+    │   ├── heston.py        # Heston model simulation
+    │   └── preprocessor.py  # Feature engineering (5 features)
+    │
+    ├── models/
+    │   ├── deep_hedging.py  # Network with temporal loop
+    │   ├── losses.py        # OCE CVaR loss (corrected)
+    │   └── trainer.py       # Training infrastructure
+    │
+    ├── pruning/
+    │   ├── magnitude.py     # Iterative Magnitude Pruning
+    │   ├── masks.py         # Mask utilities
+    │   └── rewind.py        # Weight rewinding
+    │
+    ├── attacks/
+    │   ├── fgsm.py          # FGSM attack
+    │   ├── pgd.py           # PGD attack
+    │   └── adversarial_trainer.py  # Madry protocol
+    │
+    ├── evaluation/
+    │   ├── baselines.py     # Delta hedging baseline
+    │   └── metrics.py       # Evaluation metrics
+    │
+    └── utils/
+        └── helpers.py       # Utility functions
+```
 
-1. **Deep Hedging** - Using deep reinforcement learning for portfolio hedging
-2. **Lottery Ticket Hypothesis** - Finding sparse subnetworks that train as well as dense networks
-3. **Adversarial Robustness** - Testing model resilience under market perturbations
+## Critical Corrections Applied
 
-**Research Questions:**
-- Do boosting tickets exist in deep hedging networks?
-- Are sparse networks robust to market perturbations (price + volatility)?
-- Can we combine sparsity + robustness efficiently?
+### 1. OCE "Free Lunch" Fix (losses.py)
+**Problem**: P&L included premium `y`, allowing network to cheat by pushing y→∞
 
-**Key Contribution:**
-- First application of boosting tickets to Deep Hedging
-- 40-50% time savings for adversarial training
-- Demonstration that sparse robust tickets are achievable with proper protocol
+**Solution**: 
+```python
+# BEFORE (wrong)
+pnl = y - Z + trading_pnl - costs
 
----
+# AFTER (correct)
+pnl_naked = -Z + trading_pnl - costs  # No y!
+loss = cvar_loss(pnl_naked, y, alpha)  # y added separately in OCE
+```
 
-## Quick Start
+### 2. Temporal Architecture Fix (deep_hedging.py)
+**Problem**: Global feed-forward, no memory of previous action
 
-### Installation
+**Solution**: Explicit temporal loop with delta_prev as input
+```python
+for t in range(n_steps):
+    input_t = [market_features_t, delta_{t-1}]
+    delta_t = network(input_t)
+```
+
+### 3. Feature Fix (preprocessor.py)
+**Problem**: 8 features including delta_prev/pnl_prev computed before training
+
+**Solution**: Only 5 exogenous features; delta_prev computed in model loop
+
+### 4. LTH Learning Rate Fix (config.yaml)
+**Problem**: Same LR throughout
+
+**Solution**: 
+- `initial_lr = 1e-4` (small, for pruning)
+- `retrain_lr = 1e-2` (100x larger, for retraining)
+
+## Usage
+
+### 1. Install dependencies
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd Deep_Robust_LTH_project
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Generate Data
+### 2. Run baseline
 ```bash
-# Generate Heston paths (70,000 paths)
-python scripts/generate_data.py --config config.yaml
+python run_baseline.py --config config.yaml
 ```
 
-### Train Baseline
+### 3. Run LTH experiments
 ```bash
-# Train dense baseline model
-python scripts/train_baseline.py --config config.yaml
+python run_lth.py --config config.yaml
 ```
 
-### Run Full Pipeline
-
-See notebooks in order:
-1. `00_data_exploration.ipynb` - Validate Heston simulation
-2. `01_baseline_deep_hedging.ipynb` - Train baseline
-3. `02_lottery_tickets.ipynb` - Discover boosting tickets
-4. `03_adversarial_attacks.ipynb` - Test robustness
-5. `04_regime_shifts.ipynb` - Out-of-distribution testing
-6. `05_adversarial_training.ipynb` - Train robust tickets
-7. `06_interpretation.ipynb` - Feature analysis
-
----
-
-## Project Structure
-```
-Deep_Robust_LTH_project/
-├── config.yaml                 # Centralized configuration
-├── requirements.txt            # Python dependencies
-├── README.md                   # This file
-│
-├── data/
-│   ├── raw/                    # (empty, simulation only)
-│   └── processed/              # Generated Heston paths
-│
-├── src/
-│   ├── data/                   # Heston simulation + features
-│   ├── models/                 # MLP architecture + losses
-│   ├── pruning/                # Magnitude pruning + masking
-│   ├── attacks/                # FGSM + PGD attacks
-│   ├── evaluation/             # Metrics + baselines
-│   └── utils/                  # Config + logging + viz
-│
-├── notebooks/                  # Jupyter notebooks (experiments)
-├── scripts/                    # CLI scripts
-├── experiments/                # Saved results
-├── figures/                    # Publication-ready figures
-├── report/                     # LaTeX report
-└── tests/                      # Unit tests
+### 4. Run adversarial training
+```bash
+python run_adversarial.py --config config.yaml
 ```
 
----
-
-## Key Design Decisions
-
-### Architecture
-- **Type**: MLP (not LSTM) - confirmed by Buehler et al. (2019)
-- **Size**: 512-512-256 (~400k parameters)
-- **Regularization**: Dropout (0.2, 0.2, 0.1), BatchNorm, Weight Decay (1e-5)
-
-### Features (8 features)
-1. log(S_t / K) - Log-moneyness
-2. (S_t - S_{t-1})/S_{t-1} - Return
-3. √v_t - Volatility
-4. v_t - v_{t-1} - Variance change
-5. (T - t) / T - Time to maturity
-6. δ_{t-1} - Previous position
-7. |δ_t - δ_{t-1}| - Trading volume
-8. PnL_{t-1} - Cumulative P&L
-
-### Adversarial Perturbations
-- **Type**: Combined price + volatility
-- **Norms**: L∞ bounded on both dimensions
-- **Epsilons**:
-  - FGSM: ε_S=0.02, ε_v=0.2
-  - PGD: ε_S=0.05, ε_v=0.5
-  - Stress: ε_S=0.10, ε_v=1.0
-
-### Method: Boosting Tickets
-- **Phase 1**: FGSM training (100 epochs, LR=0.01)
-- **Pruning**: One-shot 80% (magnitude-based)
-- **Phase 2**: PGD retraining (40-70 epochs, warmup LR 0.01→0.1)
-
----
+### 5. Run full pipeline
+```bash
+python run_full_experiment.py --config config.yaml
+```
 
 ## Expected Results
 
-**Baseline vs Boosting Tickets:**
-- Convergence speed: 2-3× faster
-- Sparsity: 80% weights pruned
-- Performance: Comparable to dense network
+After training:
+- `y` (learned premium) ≈ 1.6 (close to Black-Scholes price)
+- Sharpe ratio > 0
+- CVaR(5%) improvement over Delta Hedging
 
-**Standard vs Robust Tickets:**
-- Robustness gap: Decreases with adversarial training
-- Time savings: 40-50% vs dense PGD baseline
-- Robustness: Matches or exceeds baseline
+For Lottery Tickets:
+- Sparse networks (up to 90% sparsity) matching dense performance
+- "Winning tickets" that retrain successfully
 
----
+For Adversarial Training:
+- Reduced gap between clean and adversarial performance
+- PGD-trained models more robust than naturally trained
 
 ## References
 
-1. Buehler et al. (2019) - Deep Hedging
-2. Frankle & Carbin (2019) - Lottery Ticket Hypothesis
-3. Li et al. (2020) - Boosting Tickets for Adversarial Training
-4. Madry et al. (2018) - Towards Deep Learning Models Resistant to Adversarial Attacks
-5. Ilyas et al. (2019) - Adversarial Examples Are Not Bugs, They Are Features
-
----
+1. Buehler, H. et al. (2019). "Deep Hedging"
+2. Frankle, J. & Carlin, M. (2019). "The Lottery Ticket Hypothesis"
+3. Madry, A. et al. (2017). "Towards Deep Learning Models Resistant to Adversarial Attacks"
+4. Li, Y. et al. (2020). "Boosting Adversarial Training with Hypersphere Embedding"
 
 ## Team
 
-- Abdoulaye TRAORE
-- Franck Wilson KOUASSI
-- Tingjia ZHANG
+- Abdoul (Lead)
+- Franck Wilson Kouassi
+- Tingjia Zhang
 
-**Supervisor**: Prof. Austin .J
-
-**Deadline**: January 16, 2025
-
----
-
-## License
-
-This project is for academic research purposes.
-
----
-
-## Acknowledgments
-
-- Papers with Code for reproducibility standards
-- PyTorch team for excellent framework
-- Anthropic Claude for assistance
+Supervised by Professor Champonnois

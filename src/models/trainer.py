@@ -1,319 +1,474 @@
 """
-Training infrastructure for Deep Hedging
+Training Loop for Deep Hedging
+
+Implements the training loop with:
+- OCE loss optimization
+- Checkpointing (save/load)
+- Early stopping
+- Learning rate scheduling
+- Comprehensive logging
 """
 
+import os
+import time
+import json
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader
-from typing import Optional, Dict
-from ..models.losses import cvar_loss, compute_pnl
-from ..utils.logging import setup_logger
-from pathlib import Path 
+from typing import Dict, Optional, Tuple, List, Any
+from pathlib import Path
+import numpy as np
 
-
-def get_optimizer(model, training_config):
-    """Create optimizer from config"""
-    optimizer_name = training_config['optimizer_name']
-    lr = training_config['learning_rate']
-    weight_decay = training_config.get('weight_decay', 0)
-    
-    if optimizer_name == 'adam':
-        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    elif optimizer_name == 'sgd':
-        momentum = training_config.get('momentum', 0.9)
-        return torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
-    else:
-        raise ValueError(f"Unknown optimizer: {optimizer_name}")
-
-def get_lr_schedule(optimizer, training_config):
-    """Create learning rate scheduler from config"""
-    scheduler_type = training_config.get('lr_scheduler', None)
-    
-    if scheduler_type is None:
-        return None
-    elif scheduler_type == 'cosine':
-        epochs = training_config['epochs']
-        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
-    elif scheduler_type == 'step':
-        step_size = training_config.get('lr_step_size', 30)
-        gamma = training_config.get('lr_gamma', 0.1)
-        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-    else:
-        raise ValueError(f"Unknown scheduler: {scheduler_type}")
-    
+from src.data.preprocessor import compute_features, N_EXOGENOUS_FEATURES
+from src.models.deep_hedging import DeepHedgingNetwork
+from src.models.losses import OCELoss
 
 
 class Trainer:
     """
-    Trainer for Deep Hedging networks
+    Trainer for Deep Hedging models.
+    
+    Handles:
+    - Training loop with temporal forward pass
+    - Validation
+    - Checkpointing (save/load)
+    - Early stopping
+    - Learning rate scheduling
+    - Logging
     """
     
     def __init__(
         self,
-        model: nn.Module,
-        config: dict,
-        device: str = 'cuda',
-        mask: Optional[Dict[str, torch.Tensor]] = None  
+        model: DeepHedgingNetwork,
+        loss_fn: nn.Module,
+        config: Dict,
+        device: torch.device
     ):
         """
-        Initialize trainer
+        Initialize trainer.
         
         Args:
-            model: Neural network
+            model: DeepHedgingNetwork instance
+            loss_fn: Loss function (OCELoss or similar)
             config: Configuration dictionary
-            device: Device to use
-            mask: Optional pruning mask (for training sparse networks)  
+            device: torch device
         """
         self.model = model.to(device)
+        self.loss_fn = loss_fn
         self.config = config
         self.device = device
-        self.mask = mask 
         
-        # Optimizer (same LR for all parameters, like Buehler)
-        self.optimizer = get_optimizer(model, config['training'])
-        self.lr_scheduler = get_lr_schedule(self.optimizer, config['training'])
- 
-        # Loss function
-        self.criterion_alpha = config['training'].get('cvar_alpha', 0.05)
+        # Extract training config
+        train_config = config.get('training', {})
+        self.epochs = train_config.get('epochs', 100)
+        self.lr = train_config.get('learning_rate', 1e-3)
+        self.weight_decay = train_config.get('weight_decay', 0.0)
+        self.grad_clip = train_config.get('gradient_clip', 1.0)
+        self.patience = train_config.get('patience', 20)
+        self.min_delta = train_config.get('min_delta', 1e-6)
         
-        # Logging
-        self.train_losses = []
-        self.val_losses = []
-        self.best_val_loss = float('inf')
+        # Extract Heston config for dt calculation
+        heston_config = config['data']['heston']
+        self.T = config['data']['T']
+        self.n_steps = config['data']['n_steps']
+        self.dt = self.T / self.n_steps
+        self.K = heston_config.get('K', 100.0)
         
-        # Early stopping
-        self.patience = config['training'].get('patience', 20)
-        self.patience_counter = 0
-
-        # Logger pour TensorBoard
-        if 'logging' in config and 'experiment_name' in config:
-            self.logger = setup_logger(config)
+        # Checkpointing config
+        checkpoint_config = config.get('checkpointing', {})
+        self.checkpoint_enabled = checkpoint_config.get('enabled', True)
+        self.checkpoint_dir = checkpoint_config.get('directory', 'checkpoints')
+        self.save_freq = checkpoint_config.get('save_freq', 10)
+        self.keep_last = checkpoint_config.get('keep_last', 3)
+        
+        # Initialize optimizer
+        self.optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=self.lr,
+            weight_decay=self.weight_decay
+        )
+        
+        # Learning rate scheduler (optional)
+        scheduler_config = train_config.get('scheduler', {})
+        if scheduler_config.get('enabled', False):
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode='min',
+                factor=scheduler_config.get('factor', 0.5),
+                patience=scheduler_config.get('patience', 10),
+                min_lr=scheduler_config.get('min_lr', 1e-6)
+            )
         else:
-            self.logger = None
+            self.scheduler = None
+        
+        # Training state
+        self.current_epoch = 0
+        self.best_val_loss = float('inf')
+        self.epochs_without_improvement = 0
+        self.training_history = []
+        
+        # Create checkpoint directory
+        if self.checkpoint_enabled:
+            Path(self.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     
-    def train_epoch(
-        self,
-        train_loader: DataLoader,
-        K: float,
-        T: float,
-        dt: float
-    ) -> float:
+    def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
         """
-        Train for one epoch
+        Train for one epoch.
         
         Args:
-            train_loader: Training data loader
-            K: Strike price
-            T: Time to maturity
-            dt: Time step
+            train_loader: Training data loader yielding (S, v, Z) batches
             
         Returns:
-            Average training loss
+            Dictionary with training metrics
         """
         self.model.train()
-        total_loss = 0.0
-        num_batches = 0
         
-        for S, v, Z in train_loader:
+        total_loss = 0.0
+        total_pnl = 0.0
+        total_premium = 0.0
+        n_batches = 0
+        
+        for batch_idx, (S, v, Z) in enumerate(train_loader):
+            # Move to device
             S = S.to(self.device)
             v = v.to(self.device)
             Z = Z.to(self.device)
             
-            # Compute features
-            features = self._compute_features_batch(S, v, K, T, dt)
+            # Compute exogenous features on GPU
+            features = compute_features(S, v, self.K, self.T, self.dt)
             
-            # Forward pass
-            delta, y = self.model(features)
-            
-            # Compute P&L
-            pnl = compute_pnl(S, delta, Z, y, c_prop=self.config['data']['transaction_cost']['c_prop'])
+            # Forward pass with temporal loop
+            deltas, y = self.model(features, S)
             
             # Compute loss
-            loss = cvar_loss(pnl, alpha=self.criterion_alpha)
+            loss, info = self.loss_fn(deltas, S, Z, y, self.dt)
             
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
             
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            if self.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
             
-            # Optimizer step
             self.optimizer.step()
             
-            # Re-apply mask after optimizer step
-            if self.mask is not None:
-                self._apply_mask()
-            
+            # Accumulate metrics
             total_loss += loss.item()
-            num_batches += 1
+            total_pnl += info['pnl_mean'].item()
+            total_premium += info['premium_y'].item()
+            n_batches += 1
         
-        return total_loss / num_batches
+        return {
+            'train_loss': total_loss / n_batches,
+            'train_pnl_mean': total_pnl / n_batches,
+            'train_premium': total_premium / n_batches
+        }
     
-    def validate(
-        self,
-        val_loader: DataLoader,
-        K: float,
-        T: float,
-        dt: float
-    ) -> float:
+    @torch.no_grad()
+    def validate(self, val_loader: DataLoader) -> Dict[str, float]:
         """
-        Validate the model
+        Validate the model.
         
         Args:
             val_loader: Validation data loader
-            K: Strike price
-            T: Time to maturity
-            dt: Time step
             
         Returns:
-            Average validation loss
+            Dictionary with validation metrics
         """
         self.model.eval()
+        
         total_loss = 0.0
-        num_batches = 0
+        total_pnl = 0.0
+        total_pnl_std = 0.0
+        total_premium = 0.0
+        n_batches = 0
         
-        with torch.no_grad():
-            for S, v, Z in val_loader:
-                S = S.to(self.device)
-                v = v.to(self.device)
-                Z = Z.to(self.device)
-                
-                # Compute features
-                features = self._compute_features_batch(S, v, K, T, dt)
-                
-                # Forward pass
-                delta, y = self.model(features)
-                
-                # Compute P&L
-                pnl = compute_pnl(S, delta, Z, y, c_prop=self.config['data']['transaction_cost']['c_prop'])
-                
-                # Compute loss
-                loss = cvar_loss(pnl, alpha=self.criterion_alpha)
-                
-                total_loss += loss.item()
-                num_batches += 1
+        all_pnls = []
         
-        return total_loss / num_batches
+        for S, v, Z in val_loader:
+            S = S.to(self.device)
+            v = v.to(self.device)
+            Z = Z.to(self.device)
+            
+            features = compute_features(S, v, self.K, self.T, self.dt)
+            deltas, y = self.model(features, S)
+            loss, info = self.loss_fn(deltas, S, Z, y, self.dt)
+            
+            total_loss += loss.item()
+            total_pnl += info['pnl_mean'].item()
+            total_pnl_std += info['pnl_std'].item()
+            total_premium += info['premium_y'].item()
+            n_batches += 1
+            
+            # Collect P&Ls for CVaR calculation
+            pnl = self.loss_fn.compute_pnl(deltas, S, Z, self.dt)
+            all_pnls.append(pnl.cpu())
+        
+        # Compute CVaR from all P&Ls
+        all_pnls = torch.cat(all_pnls)
+        alpha = self.loss_fn.alpha
+        sorted_pnls, _ = torch.sort(all_pnls)
+        var_idx = int(alpha * len(sorted_pnls))
+        cvar = sorted_pnls[:max(var_idx, 1)].mean().item()
+        
+        return {
+            'val_loss': total_loss / n_batches,
+            'val_pnl_mean': total_pnl / n_batches,
+            'val_pnl_std': total_pnl_std / n_batches,
+            'val_premium': total_premium / n_batches,
+            'val_cvar': cvar
+        }
     
-    def fit(
+    def train(
         self,
         train_loader: DataLoader,
         val_loader: DataLoader,
-        K: float,
-        T: float,
-        dt: float
-    ) -> float:
+        start_epoch: int = 0
+    ) -> Dict[str, Any]:
         """
-        Train the model with early stopping
+        Full training loop.
         
         Args:
             train_loader: Training data loader
             val_loader: Validation data loader
-            K: Strike price
-            T: Time to maturity
-            dt: Time step
+            start_epoch: Starting epoch (for resumption)
             
         Returns:
-            Best validation loss
+            Training results dictionary
         """
-        num_epochs = self.config['training']['epochs']
+        self.current_epoch = start_epoch
+        start_time = time.time()
         
-        for epoch in range(num_epochs):
+        print(f"\n{'='*60}")
+        print(f"Starting training from epoch {start_epoch + 1}")
+        print(f"Device: {self.device}")
+        print(f"Epochs: {self.epochs}, LR: {self.lr}")
+        print(f"Early stopping patience: {self.patience}")
+        print(f"{'='*60}\n")
+        
+        for epoch in range(start_epoch, self.epochs):
+            self.current_epoch = epoch
+            epoch_start = time.time()
+            
             # Train
-            train_loss = self.train_epoch(train_loader, K, T, dt)
-            self.train_losses.append(train_loss)
+            train_metrics = self.train_epoch(train_loader)
             
             # Validate
-            val_loss = self.validate(val_loader, K, T, dt)
-            self.val_losses.append(val_loss)
+            val_metrics = self.validate(val_loader)
             
-            # Learning rate scheduler
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+            # Update learning rate scheduler
+            if self.scheduler is not None:
+                self.scheduler.step(val_metrics['val_loss'])
             
-            # Print progress
-            y_value = self.model.y.item()
-            print(f"Epoch {epoch+1}/{num_epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}, y={y_value:.6f}")
-
-            # Log metrics to TensorBoard
-            if self.logger:
-                self.logger.log_metrics({
-                    'train_loss': train_loss,
-                    'val_loss': val_loss,
-                    'learned_premium_y': y_value
-                }, step=epoch)
+            # Combine metrics
+            metrics = {**train_metrics, **val_metrics, 'epoch': epoch + 1}
+            metrics['lr'] = self.optimizer.param_groups[0]['lr']
+            metrics['epoch_time'] = time.time() - epoch_start
+            
+            self.training_history.append(metrics)
+            
+            # Check for improvement
+            if val_metrics['val_loss'] < self.best_val_loss - self.min_delta:
+                self.best_val_loss = val_metrics['val_loss']
+                self.epochs_without_improvement = 0
+                
+                # Save best model
+                if self.checkpoint_enabled:
+                    self.save_checkpoint('best')
+                
+                improved = " *"
+            else:
+                self.epochs_without_improvement += 1
+                improved = ""
+            
+            # Logging
+            print(f"Epoch {epoch + 1:3d}/{self.epochs} | "
+                  f"Train Loss: {train_metrics['train_loss']:.6f} | "
+                  f"Val Loss: {val_metrics['val_loss']:.6f} | "
+                  f"Premium: {val_metrics['val_premium']:.4f} | "
+                  f"CVaR: {val_metrics['val_cvar']:.4f} | "
+                  f"Time: {metrics['epoch_time']:.1f}s{improved}")
+            
+            # Periodic checkpoint
+            if self.checkpoint_enabled and (epoch + 1) % self.save_freq == 0:
+                self.save_checkpoint(f'epoch_{epoch + 1}')
+                self._cleanup_old_checkpoints()
             
             # Early stopping
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                self.patience_counter = 0
-                self.save_checkpoint('experiments/baseline/best_model.pt')
-            else:
-                self.patience_counter += 1
-                if self.patience_counter >= self.patience:
-                    print(f"Early stopping at epoch {epoch+1}")
-                    break
+            if self.epochs_without_improvement >= self.patience:
+                print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+                break
         
-        # Close logger
-        if self.logger:
-            self.logger.close()
-
-        return self.best_val_loss
+        # Save final checkpoint
+        if self.checkpoint_enabled:
+            self.save_checkpoint('latest')
+        
+        total_time = time.time() - start_time
+        
+        print(f"\n{'='*60}")
+        print(f"Training completed in {total_time:.1f}s ({total_time/60:.1f} min)")
+        print(f"Best validation loss: {self.best_val_loss:.6f}")
+        print(f"{'='*60}\n")
+        
+        return {
+            'best_val_loss': self.best_val_loss,
+            'final_epoch': self.current_epoch + 1,
+            'total_time': total_time,
+            'history': self.training_history
+        }
     
-    def _compute_features_batch(
-        self,
-        S: torch.Tensor,
-        v: torch.Tensor,
-        K: float,
-        T: float,
-        dt: float
-    ) -> torch.Tensor:
+    def save_checkpoint(self, name: str):
         """
-        Compute features for a batch DIRECTEMENT sur GPU
+        Save a checkpoint.
         
         Args:
-            S: Stock prices (batch, n_steps)
-            v: Variances (batch, n_steps)
-            K: Strike price
-            T: Time to maturity
-            dt: Time step
+            name: Checkpoint name (e.g., 'best', 'latest', 'epoch_50')
+        """
+        checkpoint = {
+            'epoch': self.current_epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'best_val_loss': self.best_val_loss,
+            'epochs_without_improvement': self.epochs_without_improvement,
+            'training_history': self.training_history,
+            'config': self.config
+        }
+        
+        if self.scheduler is not None:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
+        path = os.path.join(self.checkpoint_dir, f'{name}.pt')
+        torch.save(checkpoint, path)
+        
+        # Also save training history as JSON for easy inspection
+        if name == 'best' or name == 'latest':
+            history_path = os.path.join(self.checkpoint_dir, 'training_history.json')
+            with open(history_path, 'w') as f:
+                json.dump(self.training_history, f, indent=2)
+    
+    def load_checkpoint(self, name: str) -> int:
+        """
+        Load a checkpoint.
+        
+        Args:
+            name: Checkpoint name
             
         Returns:
-            features: (batch, n_steps, 8)
+            Epoch number to resume from
         """
-        from ..data.preprocessor import compute_features
+        path = os.path.join(self.checkpoint_dir, f'{name}.pt')
         
-        features = compute_features(S, v, K, T, dt)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Checkpoint not found: {path}")
         
-        return features
+        checkpoint = torch.load(path, map_location=self.device)
+        
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.best_val_loss = checkpoint['best_val_loss']
+        self.epochs_without_improvement = checkpoint['epochs_without_improvement']
+        self.training_history = checkpoint.get('training_history', [])
+        
+        if self.scheduler is not None and 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        resume_epoch = checkpoint['epoch'] + 1
+        
+        print(f"[Trainer] Loaded checkpoint '{name}' (epoch {checkpoint['epoch'] + 1})")
+        print(f"[Trainer] Best val loss: {self.best_val_loss:.6f}")
+        
+        return resume_epoch
     
-    
-    def _apply_mask(self):
-        """
-        Apply pruning mask to model weights
+    def _cleanup_old_checkpoints(self):
+        """Remove old epoch checkpoints, keeping only the last N."""
+        import glob
         
-        This ensures that pruned weights remain at zero after optimizer updates
-        """
-        for name, param in self.model.named_parameters():
-            if name in self.mask:
-                param.data *= self.mask[name].to(self.device)
-    
-    def save_checkpoint(self, filepath: str):
-        """
-        Save model checkpoint
+        pattern = os.path.join(self.checkpoint_dir, 'epoch_*.pt')
+        checkpoints = sorted(glob.glob(pattern))
         
-        Args:
-            filepath: Path to save checkpoint
-        """
-        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self.model.state_dict(), filepath)
+        # Keep best, latest, and last N epoch checkpoints
+        if len(checkpoints) > self.keep_last:
+            for ckpt in checkpoints[:-self.keep_last]:
+                os.remove(ckpt)
+
+
+def check_existing_checkpoint(checkpoint_dir: str, checkpoint_type: str = 'best') -> Optional[str]:
+    """
+    Check if a checkpoint exists.
     
-    def load_checkpoint(self, filepath: str):
-        """
-        Load model checkpoint
+    Args:
+        checkpoint_dir: Directory containing checkpoints
+        checkpoint_type: Type of checkpoint ('best', 'latest', etc.)
         
-        Args:
-            filepath: Path to checkpoint
-        """
-        self.model.load_state_dict(torch.load(filepath, map_location=self.device))
+    Returns:
+        Path to checkpoint if exists, None otherwise
+    """
+    path = os.path.join(checkpoint_dir, f'{checkpoint_type}.pt')
+    return path if os.path.exists(path) else None
+
+
+def load_trained_model(
+    model: DeepHedgingNetwork,
+    checkpoint_path: str,
+    device: torch.device
+) -> Tuple[DeepHedgingNetwork, Dict]:
+    """
+    Load a trained model from checkpoint.
+    
+    Args:
+        model: Model instance (architecture must match)
+        checkpoint_path: Path to checkpoint file
+        device: Device to load model on
+        
+    Returns:
+        model: Loaded model
+        info: Checkpoint info (epoch, val_loss, etc.)
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
+    model.eval()
+    
+    info = {
+        'epoch': checkpoint['epoch'] + 1,
+        'best_val_loss': checkpoint['best_val_loss'],
+        'training_history': checkpoint.get('training_history', [])
+    }
+    
+    print(f"[Model] Loaded trained model from {checkpoint_path}")
+    print(f"[Model] Trained for {info['epoch']} epochs, val_loss: {info['best_val_loss']:.6f}")
+    
+    return model, info
+
+
+def create_trainer(
+    model: DeepHedgingNetwork,
+    loss_fn: nn.Module,
+    config: Dict,
+    device: torch.device,
+    experiment_dir: Optional[str] = None
+) -> Trainer:
+    """
+    Factory function to create a Trainer.
+    
+    Args:
+        model: DeepHedgingNetwork instance
+        loss_fn: Loss function
+        config: Configuration dictionary
+        device: torch device
+        experiment_dir: Override checkpoint directory
+        
+    Returns:
+        Trainer instance
+    """
+    # Override checkpoint directory if experiment_dir provided
+    if experiment_dir is not None:
+        if 'checkpointing' not in config:
+            config['checkpointing'] = {}
+        config['checkpointing']['directory'] = os.path.join(experiment_dir, 'checkpoints')
+    
+    trainer = Trainer(model, loss_fn, config, device)
+    
+    return trainer

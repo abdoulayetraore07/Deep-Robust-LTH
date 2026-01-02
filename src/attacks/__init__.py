@@ -1,13 +1,5 @@
-"""
-Adversarial attacks for Deep Hedging
-"""
+"""Adversarial attacks and training."""
 
-from .fgsm import fgsm_attack
-from .pgd import pgd_attack
-from .adversarial_trainer import AdversarialTrainer
-
-__all__ = [
-    'fgsm_attack',
-    'pgd_attack',
-    'AdversarialTrainer',
-]
+from src.attacks.fgsm import FGSM, create_fgsm_attack
+from src.attacks.pgd import PGD, create_pgd_attack
+from src.attacks.adversarial_trainer import AdversarialTrainer, create_adversarial_trainer
