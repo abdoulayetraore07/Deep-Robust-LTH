@@ -299,4 +299,6 @@ def create_loss_function(config: Dict) -> nn.Module:
             transaction_cost=tc
         )
         print(f"[Loss] Created EntropicRiskLoss (λ={lam}, TC={tc})")
+    
+    return loss_fn
 
