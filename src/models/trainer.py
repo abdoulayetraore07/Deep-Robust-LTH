@@ -68,6 +68,9 @@ class Trainer:
         self.patience = train_config.get('patience', 20)
         self.min_delta = train_config.get('min_delta', 1e-6)
         
+        # Loss type for appropriate logging
+        self.loss_type = train_config.get('loss_type', 'cvar')
+        
         # Alpha for CVaR monitoring (independent of loss function)
         # This ensures we can always compute CVaR metrics for comparison,
         # regardless of which loss function is used for training
@@ -247,7 +250,7 @@ class Trainer:
             start_epoch: Starting epoch (for resumption)
             
         Returns:
-            Training results dictionary
+            Dictionary with training results
         """
         self.current_epoch = start_epoch
         start_time = time.time()
@@ -255,6 +258,7 @@ class Trainer:
         print(f"\n{'='*60}")
         print(f"Starting training from epoch {start_epoch + 1}")
         print(f"Device: {self.device}")
+        print(f"Loss type: {self.loss_type.upper()}")
         print(f"Epochs: {self.epochs}, LR: {self.lr}")
         print(f"Early stopping patience: {self.patience}")
         print(f"{'='*60}\n")
@@ -294,11 +298,14 @@ class Trainer:
                 self.epochs_without_improvement += 1
                 improved = ""
             
-            # Logging
+            # Logging - adapted based on loss type
+            # For both loss types, we show PnL Mean and Std which are the key metrics
+            # Premium is shown for OCE (learned y), for Entropic it's the implied premium (-pnl_mean)
             print(f"Epoch {epoch + 1:3d}/{self.epochs} | "
                   f"Train Loss: {train_metrics['train_loss']:.6f} | "
                   f"Val Loss: {val_metrics['val_loss']:.6f} | "
-                  f"Premium: {val_metrics['val_premium']:.4f} | "
+                  f"PnL Mean: {val_metrics['val_pnl_mean']:.4f} | "
+                  f"PnL Std: {val_metrics['val_pnl_std']:.4f} | "
                   f"CVaR: {val_metrics['val_cvar']:.4f} | "
                   f"Time: {metrics['epoch_time']:.1f}s{improved}")
             
@@ -321,6 +328,15 @@ class Trainer:
         print(f"\n{'='*60}")
         print(f"Training completed in {total_time:.1f}s ({total_time/60:.1f} min)")
         print(f"Best validation loss: {self.best_val_loss:.6f}")
+        
+        # Print final price estimate based on loss type
+        if self.training_history:
+            final_pnl_mean = self.training_history[-1]['val_pnl_mean']
+            final_premium = self.training_history[-1]['val_premium']
+            if self.loss_type == 'entropic':
+                print(f"Implied price (from -PnL Mean): {-final_pnl_mean:.4f}")
+            else:
+                print(f"Learned premium y: {final_premium:.4f}")
         print(f"{'='*60}\n")
         
         return {

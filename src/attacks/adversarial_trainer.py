@@ -2,13 +2,13 @@
 Adversarial Training for Deep Hedging
 
 Implements adversarial training following Madry et al. (2018):
-    min_Î¸ E_{(x,y)} [max_{Î´âˆˆÎ”} L(f_Î¸(x + Î´), y)]
+    min_θ E_{(x,y)} [max_{δ∈Δ} L(f_θ(x + δ), y)]
 
 Supports multiple training modes:
 1. Standard training (no adversarial)
 2. FGSM adversarial training (fast, weak)
 3. PGD adversarial training (slow, strong)
-4. Curriculum adversarial training (increasing Îµ)
+4. Curriculum adversarial training (increasing ε)
 5. Mixed training (clean + adversarial batches)
 
 Key insight from "Boosting Tickets" paper:
@@ -39,7 +39,7 @@ class AdversarialTrainer:
     - 'none': Standard training
     - 'fgsm': FGSM adversarial training
     - 'pgd': PGD adversarial training
-    - 'curriculum': Gradually increasing Îµ
+    - 'curriculum': Gradually increasing ε
     - 'mixed': Mix of clean and adversarial examples
     """
     
@@ -71,6 +71,9 @@ class AdversarialTrainer:
         self.weight_decay = train_config.get('weight_decay', 0.0)
         self.grad_clip = train_config.get('gradient_clip', 1.0)
         self.patience = train_config.get('patience', 20)
+        
+        # Loss type for appropriate logging
+        self.loss_type = train_config.get('loss_type', 'cvar')
         
         # Alpha for CVaR monitoring (independent of loss function)
         # This ensures we can always compute CVaR metrics for comparison,
@@ -222,9 +225,9 @@ class AdversarialTrainer:
         total_loss_clean = 0.0
         total_loss_adv = 0.0
         total_pnl = 0.0
+        total_pnl_std = 0.0
         total_premium = 0.0
         n_batches = 0
-        n_adv_batches = 0
         
         for batch_idx, (S, v, Z) in enumerate(train_loader):
             S = S.to(self.device)
@@ -234,33 +237,37 @@ class AdversarialTrainer:
             # Compute features
             features = compute_features(S, v, self.K, self.T, self.dt)
             
-            # Decide if this batch is adversarial
+            # Forward pass (clean)
+            deltas, y = self.model(features, S)
+            loss_clean, info = self.loss_fn(deltas, S, Z, y, self.dt)
+            
+            total_loss_clean += loss_clean.item()
+            total_pnl += info['pnl_mean'].item()
+            total_pnl_std += info['pnl_std'].item()
+            total_premium += info['premium_y'].item()
+            
+            # Determine training loss based on mode
             if self.adv_mode == 'none':
-                use_adversarial = False
+                loss = loss_clean
+            
             elif self.adv_mode == 'mixed':
-                use_adversarial = (batch_idx % 2 == 0)  # Alternate batches
+                # Mixed training: half clean, half adversarial
+                if batch_idx % 2 == 0:
+                    loss = loss_clean
+                else:
+                    features_adv = self._generate_adversarial(features, S, Z)
+                    deltas_adv, y_adv = self.model(features_adv, S)
+                    loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
+                    loss = loss_adv
+                    total_loss_adv += loss_adv.item()
+            
             else:
-                use_adversarial = True
-            
-            if use_adversarial and self.adv_mode != 'none':
-                # Generate adversarial features
-                features_train = self._generate_adversarial(features, S, Z)
-                n_adv_batches += 1
-                
-                # Also compute clean loss for monitoring
-                with torch.no_grad():
-                    deltas_clean, y_clean = self.model(features, S)
-                    loss_clean, _ = self.loss_fn(deltas_clean, S, Z, y_clean, self.dt)
-                    total_loss_clean += loss_clean.item()
-            else:
-                features_train = features
-            
-            # Forward pass
-            deltas, y = self.model(features_train, S)
-            loss, info = self.loss_fn(deltas, S, Z, y, self.dt)
-            
-            if use_adversarial and self.adv_mode != 'none':
-                total_loss_adv += loss.item()
+                # Full adversarial training (fgsm, pgd, curriculum)
+                features_adv = self._generate_adversarial(features, S, Z)
+                deltas_adv, y_adv = self.model(features_adv, S)
+                loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
+                loss = loss_adv
+                total_loss_adv += loss_adv.item()
             
             # Backward pass
             self.optimizer.zero_grad()
@@ -271,27 +278,19 @@ class AdversarialTrainer:
             
             self.optimizer.step()
             
-            # Accumulate metrics
             total_loss += loss.item()
-            total_pnl += info['pnl_mean'].item()
-            total_premium += info['premium_y'].item()
             n_batches += 1
         
         metrics = {
             'train_loss': total_loss / n_batches,
+            'train_loss_clean': total_loss_clean / n_batches,
             'train_pnl_mean': total_pnl / n_batches,
-            'train_premium': total_premium / n_batches,
-            'n_adv_batches': n_adv_batches,
-            'n_clean_batches': n_batches - n_adv_batches
+            'train_pnl_std': total_pnl_std / n_batches,
+            'train_premium': total_premium / n_batches
         }
         
-        if n_adv_batches > 0:
-            metrics['train_loss_clean'] = total_loss_clean / n_adv_batches
-            metrics['train_loss_adv'] = total_loss_adv / n_adv_batches
-            metrics['robustness_gap'] = metrics['train_loss_adv'] - metrics['train_loss_clean']
-        
-        if self.adv_mode == 'curriculum':
-            metrics['current_epsilon'] = self._get_current_epsilon()
+        if total_loss_adv > 0:
+            metrics['train_loss_adv'] = total_loss_adv / max(n_batches // 2, 1)
         
         return metrics
     
@@ -302,14 +301,11 @@ class AdversarialTrainer:
         include_adversarial: bool = True
     ) -> Dict[str, float]:
         """
-        Validate model on clean and adversarial data.
-        
-        This method is loss-agnostic: it works with any loss function
-        by using monitoring_alpha from config for CVaR computation.
+        Validate the model.
         
         Args:
             val_loader: Validation data loader
-            include_adversarial: Whether to also evaluate adversarial robustness
+            include_adversarial: Whether to compute adversarial metrics
             
         Returns:
             Validation metrics
@@ -319,6 +315,7 @@ class AdversarialTrainer:
         total_loss_clean = 0.0
         total_loss_adv = 0.0
         total_pnl = 0.0
+        total_pnl_std = 0.0
         total_premium = 0.0
         n_batches = 0
         
@@ -338,6 +335,7 @@ class AdversarialTrainer:
             
             total_loss_clean += loss_clean.item()
             total_pnl += info['pnl_mean'].item()
+            total_pnl_std += info['pnl_std'].item()
             total_premium += info['premium_y'].item()
             
             pnl_clean = self.loss_fn.compute_pnl(deltas, S, Z, self.dt)
@@ -366,6 +364,7 @@ class AdversarialTrainer:
         metrics = {
             'val_loss': total_loss_clean / n_batches,
             'val_pnl_mean': total_pnl / n_batches,
+            'val_pnl_std': total_pnl_std / n_batches,
             'val_premium': total_premium / n_batches,
             'val_cvar': cvar_clean
         }
@@ -404,6 +403,7 @@ class AdversarialTrainer:
         print(f"\n{'='*70}")
         print(f"Starting ADVERSARIAL training from epoch {start_epoch + 1}")
         print(f"Mode: {self.adv_mode.upper()}")
+        print(f"Loss type: {self.loss_type.upper()}")
         print(f"Device: {self.device}")
         print(f"{'='*70}\n")
         
@@ -436,11 +436,13 @@ class AdversarialTrainer:
                 self.epochs_without_improvement += 1
                 improved = ""
             
-            # Logging
+            # Logging - show PnL Mean and Std for both loss types
             log_str = (
                 f"Epoch {epoch + 1:3d}/{self.epochs} | "
                 f"Loss: {train_metrics['train_loss']:.4f} | "
-                f"Val: {val_metrics['val_loss']:.4f}"
+                f"Val: {val_metrics['val_loss']:.4f} | "
+                f"PnL: {val_metrics['val_pnl_mean']:.4f} | "
+                f"Std: {val_metrics['val_pnl_std']:.4f}"
             )
             
             if 'val_loss_adv' in val_metrics:
@@ -448,7 +450,7 @@ class AdversarialTrainer:
                 log_str += f" | Gap: {val_metrics['val_robustness_gap']:.4f}"
             
             if self.adv_mode == 'curriculum':
-                log_str += f" | Îµ: {self._get_current_epsilon():.4f}"
+                log_str += f" | ε: {self._get_current_epsilon():.4f}"
             
             log_str += f" | Time: {metrics['epoch_time']:.1f}s{improved}"
             print(log_str)
@@ -471,6 +473,15 @@ class AdversarialTrainer:
         print(f"\n{'='*70}")
         print(f"Adversarial training completed in {total_time:.1f}s")
         print(f"Best validation loss: {self.best_val_loss:.6f}")
+        
+        # Print final price estimate based on loss type
+        if self.training_history:
+            final_pnl_mean = self.training_history[-1]['val_pnl_mean']
+            final_premium = self.training_history[-1]['val_premium']
+            if self.loss_type == 'entropic':
+                print(f"Implied price (from -PnL Mean): {-final_pnl_mean:.4f}")
+            else:
+                print(f"Learned premium y: {final_premium:.4f}")
         print(f"{'='*70}\n")
         
         return {
