@@ -39,10 +39,8 @@ from src.data.heston import get_or_generate_dataset
 from src.data.preprocessor import create_dataloaders, compute_features
 from src.models.deep_hedging import create_model
 from src.models.losses import create_loss_function
-from src.models.trainer import Trainer
-from src.pruning.magnitude import create_pruner
-from src.pruning.rewind import create_rewind_scheduler
-from src.pruning.masks import MaskManager
+from src.models.trainer import Trainer, create_trainer
+from src.pruning.pruning import PruningManager
 from src.evaluation.metrics import compute_all_metrics, print_metrics
 
 
@@ -105,7 +103,7 @@ def evaluate_model(model, loss_fn, test_loader, config, device):
 
 def train_one_round(
     model, loss_fn, train_loader, val_loader,
-    config, device, round_idx, logger
+    config, device, round_idx, logger, pruning_manager=None
 ):
     """Train model for one pruning round."""
     # Get learning rate based on round
@@ -131,11 +129,13 @@ def train_one_round(
                          training_config.get('epochs', 100))
         round_config['training']['epochs'] = retrain_epochs
     
-    trainer = Trainer(
+    # Create trainer with pruning manager for integrity verification
+    trainer = create_trainer(
         model=model,
         loss_fn=loss_fn,
         config=round_config,
-        device=device
+        device=device,
+        pruning_manager=pruning_manager
     )
     
     logger.info(f"  Training with LR={lr}, epochs={round_config['training']['epochs']}")
@@ -226,12 +226,15 @@ def main():
     model = model.to(device)
     loss_fn = create_loss_function(config)
     
-    # Initialize pruner
-    pruner = create_pruner(model, config)
+    # Initialize pruning manager with PyTorch native pruning
+    exclude_layers = pruning_config.get('exclude_layers', [])
+    if pruning_config.get('exclude_output', True):
+        exclude_layers.append('layers.' + str(len(model.layers) - 1))
     
-    # Initialize rewind scheduler
-    rewind_scheduler = create_rewind_scheduler(model, config)
-    rewind_scheduler.before_training()  # Save initial weights
+    pruning_manager = PruningManager(model, exclude_layers=exclude_layers)
+    
+    # Save initial weights for LTH rewinding
+    pruning_manager.save_initial_weights()
     
     # Results storage
     results_by_sparsity = {}
@@ -256,15 +259,9 @@ def main():
         logger.info("Training...")
         train_results = train_one_round(
             model, loss_fn, train_loader, val_loader,
-            config, device, round_idx, logger
+            config, device, round_idx, logger,
+            pruning_manager=pruning_manager if round_idx > 0 else None
         )
-        
-        # Save rewind checkpoint after first epoch of round 0 (for late rewinding)
-        if round_idx == 0:
-            rewind_epoch = config.get('rewind', {}).get('epoch', 0)
-            if rewind_epoch > 0:
-                # Late rewinding checkpoint is already saved by rewind_scheduler
-                pass
         
         # Evaluate
         logger.info("Evaluating...")
@@ -273,6 +270,18 @@ def main():
         metrics['remaining_weights'] = 1 - current_sparsity
         metrics['round'] = round_idx
         metrics['train_loss'] = train_results['best_val_loss']
+        
+        # Verify pruning integrity if pruned
+        if round_idx > 0:
+            if pruning_manager.verify_integrity():
+                logger.info("  Pruning integrity: PASS")
+            else:
+                logger.warning("  Pruning integrity: FAIL")
+            
+            # Get actual sparsity
+            actual_sparsity = pruning_manager.get_sparsity()
+            metrics['actual_sparsity'] = actual_sparsity['total']
+            logger.info(f"  Actual sparsity: {actual_sparsity['total']:.2%}")
         
         results_by_sparsity[current_sparsity] = metrics
         
@@ -285,7 +294,13 @@ def main():
         # Save ticket if requested
         if args.save_tickets:
             ticket_path = tickets_dir / f'ticket_sparsity_{current_sparsity:.2f}.pt'
-            pruner.save_ticket(str(ticket_path))
+            # With torch.nn.utils.prune, masks are saved with model.state_dict()
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'sparsity': current_sparsity,
+                'metrics': metrics,
+                'round': round_idx
+            }, ticket_path)
             logger.info(f"  Saved ticket to {ticket_path}")
         
         # Check if target sparsity reached
@@ -293,20 +308,21 @@ def main():
             logger.info(f"Target sparsity {target_sparsity:.0%} reached!")
             break
         
-        # Prune
+        # Prune and rewind
         if round_idx < n_rounds:
-            logger.info("Pruning...")
-            prune_stats = pruner.prune_round()
-            new_sparsity = pruner.get_sparsity()
+            # Calculate cumulative sparsity for next round
+            # Using: remaining = (1 - rate)^(round+1), so sparsity = 1 - remaining
+            next_sparsity = 1 - (1 - pruning_rate) ** (round_idx + 1)
+            next_sparsity = min(next_sparsity, target_sparsity)
             
-            logger.info(f"  Pruned: {current_sparsity:.2%} -> {new_sparsity:.2%}")
+            logger.info(f"Pruning to {next_sparsity:.2%} sparsity...")
+            pruning_manager.prune_by_magnitude(next_sparsity)
             
-            # Rewind weights
-            logger.info("Rewinding weights...")
-            masks = pruner.get_masks()
-            rewind_scheduler.after_pruning(masks)
+            # Rewind weights to initial values (LTH protocol)
+            logger.info("Rewinding weights to initialization...")
+            pruning_manager.rewind_to_initial()
             
-            current_sparsity = new_sparsity
+            current_sparsity = next_sparsity
     
     # =========================================================================
     # ANALYSIS
@@ -360,10 +376,10 @@ def main():
     # Save final ticket (best by Sharpe)
     final_ticket_path = experiment_dir / 'best_ticket.pt'
     torch.save({
-        'masks': pruner.get_masks(),
+        'model_state_dict': model.state_dict(),
         'sparsity': best_sparsity_sharpe,
         'metrics': results_by_sparsity[best_sparsity_sharpe],
-        'initial_weights': rewind_scheduler.rewinder.checkpoints.get('init', {})
+        'initial_weights': pruning_manager.initial_weights
     }, final_ticket_path)
     logger.info(f"Saved best ticket to {final_ticket_path}")
     

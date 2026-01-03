@@ -267,19 +267,15 @@ class DeltaHedgingBaseline:
             transaction_cost: Proportional transaction cost
             
         Returns:
-            pnl: P&L per path (n_paths,)
+            pnl: P&L for each path (n_paths,)
         """
         is_torch = isinstance(S, torch.Tensor)
         
         if is_torch:
-            # Stock price changes
             dS = S[:, 1:] - S[:, :-1]
-            
-            # Hedging gains: Σ δ_{t-1} * dS_t
             delta_prev = deltas[:, :-1]
             hedging_gains = (delta_prev * dS).sum(dim=1)
             
-            # Transaction costs
             if transaction_cost > 0:
                 initial_trade = torch.abs(deltas[:, 0]) * S[:, 0]
                 delta_changes = torch.abs(deltas[:, 1:] - deltas[:, :-1])
@@ -491,17 +487,21 @@ def evaluate_all_baselines(
     Returns:
         Dictionary of results for each baseline
     """
-  
     heston_config = config['data']['heston']
     K = heston_config.get('K', 100.0)
     T = config['data']['T']
     r = heston_config.get('r', 0.05)
-    sigma = np.sqrt(heston_config.get('v0', 0.04))  # Initial vol as proxy
+    
+    # CORRECTED: Use 'v_0' with underscore (not 'v0')
+    sigma = np.sqrt(heston_config.get('v_0', 0.04))
+    
     n_steps = config['data']['n_steps']
     dt = T / n_steps
     
     option_type = config.get('option_type', 'call')
-    transaction_cost = config.get('transaction_cost', 0.0)
+    
+    # CORRECTED: Get transaction cost from the right path
+    transaction_cost = config['data'].get('transaction_cost', {}).get('c_prop', 0.0)
     
     results = {}
     

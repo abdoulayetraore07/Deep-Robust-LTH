@@ -7,6 +7,7 @@ Implements the training loop with:
 - Early stopping
 - Learning rate scheduling
 - Comprehensive logging
+- Optional pruning integrity verification
 """
 
 import os
@@ -16,13 +17,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any, TYPE_CHECKING
 from pathlib import Path
 import numpy as np
 
 from src.data.preprocessor import compute_features, N_EXOGENOUS_FEATURES
 from src.models.deep_hedging import DeepHedgingNetwork
 from src.models.losses import OCELoss
+
+# Conditional import for type hints only (avoids circular imports)
+if TYPE_CHECKING:
+    from src.pruning.pruning import PruningManager
 
 
 class Trainer:
@@ -36,6 +41,7 @@ class Trainer:
     - Early stopping
     - Learning rate scheduling
     - Logging
+    - Optional pruning integrity verification
     """
     
     def __init__(
@@ -43,7 +49,8 @@ class Trainer:
         model: DeepHedgingNetwork,
         loss_fn: nn.Module,
         config: Dict,
-        device: torch.device
+        device: torch.device,
+        pruning_manager: Optional['PruningManager'] = None
     ):
         """
         Initialize trainer.
@@ -53,11 +60,13 @@ class Trainer:
             loss_fn: Loss function (OCELoss or similar)
             config: Configuration dictionary
             device: torch device
+            pruning_manager: Optional PruningManager for integrity verification
         """
         self.model = model.to(device)
         self.loss_fn = loss_fn
         self.config = config
         self.device = device
+        self.pruning_manager = pruning_manager
         
         # Extract training config
         train_config = config.get('training', {})
@@ -162,6 +171,13 @@ class Trainer:
             
             self.optimizer.step()
             
+            # Verify pruning integrity if pruning manager is active
+            # PyTorch's pruning hooks automatically maintain sparsity,
+            # but we verify periodically for safety
+            if self.pruning_manager is not None and batch_idx == 0:
+                if not self.pruning_manager.verify_integrity():
+                    print(f"[WARNING] Pruning integrity violation at epoch {self.current_epoch}, batch {batch_idx}")
+            
             # Accumulate metrics
             total_loss += loss.item()
             total_pnl += info['pnl_mean'].item()
@@ -255,10 +271,16 @@ class Trainer:
         self.current_epoch = start_epoch
         start_time = time.time()
         
+        # Get sparsity info if pruning is active
+        sparsity_info = ""
+        if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+            sparsity = self.pruning_manager.get_sparsity().get('total', 0)
+            sparsity_info = f", Sparsity: {sparsity:.1%}"
+        
         print(f"\n{'='*60}")
         print(f"Starting training from epoch {start_epoch + 1}")
         print(f"Device: {self.device}")
-        print(f"Loss type: {self.loss_type.upper()}")
+        print(f"Loss type: {self.loss_type.upper()}{sparsity_info}")
         print(f"Epochs: {self.epochs}, LR: {self.lr}")
         print(f"Early stopping patience: {self.patience}")
         print(f"{'='*60}\n")
@@ -282,6 +304,10 @@ class Trainer:
             metrics['lr'] = self.optimizer.param_groups[0]['lr']
             metrics['epoch_time'] = time.time() - epoch_start
             
+            # Add sparsity to metrics if pruning is active
+            if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+                metrics['sparsity'] = self.pruning_manager.get_sparsity().get('total', 0)
+            
             self.training_history.append(metrics)
             
             # Check for improvement
@@ -301,12 +327,16 @@ class Trainer:
             # Logging - adapted based on loss type
             # For both loss types, we show PnL Mean and Std which are the key metrics
             # Premium is shown for OCE (learned y), for Entropic it's the implied premium (-pnl_mean)
+            sparsity_str = ""
+            if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+                sparsity_str = f" | Sp: {metrics.get('sparsity', 0):.1%}"
+            
             print(f"Epoch {epoch + 1:3d}/{self.epochs} | "
                   f"Train Loss: {train_metrics['train_loss']:.6f} | "
                   f"Val Loss: {val_metrics['val_loss']:.6f} | "
                   f"PnL Mean: {val_metrics['val_pnl_mean']:.4f} | "
                   f"PnL Std: {val_metrics['val_pnl_std']:.4f} | "
-                  f"CVaR: {val_metrics['val_cvar']:.4f} | "
+                  f"CVaR: {val_metrics['val_cvar']:.4f}{sparsity_str} | "
                   f"Time: {metrics['epoch_time']:.1f}s{improved}")
             
             # Periodic checkpoint
@@ -337,6 +367,11 @@ class Trainer:
                 print(f"Implied price (from -PnL Mean): {-final_pnl_mean:.4f}")
             else:
                 print(f"Learned premium y: {final_premium:.4f}")
+            
+            # Print final sparsity if pruning is active
+            if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+                final_sparsity = self.training_history[-1].get('sparsity', 0)
+                print(f"Final sparsity: {final_sparsity:.2%}")
         print(f"{'='*60}\n")
         
         return {
@@ -475,7 +510,8 @@ def create_trainer(
     loss_fn: nn.Module,
     config: Dict,
     device: torch.device,
-    experiment_dir: Optional[str] = None
+    experiment_dir: Optional[str] = None,
+    pruning_manager: Optional['PruningManager'] = None
 ) -> Trainer:
     """
     Factory function to create a Trainer.
@@ -486,6 +522,7 @@ def create_trainer(
         config: Configuration dictionary
         device: torch device
         experiment_dir: Override checkpoint directory
+        pruning_manager: Optional PruningManager for integrity verification
         
     Returns:
         Trainer instance
@@ -496,6 +533,6 @@ def create_trainer(
             config['checkpointing'] = {}
         config['checkpointing']['directory'] = os.path.join(experiment_dir, 'checkpoints')
     
-    trainer = Trainer(model, loss_fn, config, device)
+    trainer = Trainer(model, loss_fn, config, device, pruning_manager=pruning_manager)
     
     return trainer

@@ -6,6 +6,7 @@ Usage:
     python scripts/train_adversarial.py --config configs/config.yaml
     python scripts/train_adversarial.py --config configs/config.yaml --mode pgd
     python scripts/train_adversarial.py --config configs/config.yaml --mode curriculum
+    python scripts/train_adversarial.py --config configs/config.yaml --pruned-model path/to/ticket.pt
 
 Options:
     --config: Path to configuration file
@@ -13,6 +14,7 @@ Options:
     --epsilon: Override adversarial epsilon
     --force-retrain: Force retraining
     --resume: Resume from checkpoint
+    --pruned-model: Path to pruned model (lottery ticket) to adversarially train
 """
 
 import argparse
@@ -39,6 +41,7 @@ from src.models.losses import create_loss_function
 from src.models.trainer import load_trained_model, check_existing_checkpoint
 from src.attacks.adversarial_trainer import create_adversarial_trainer
 from src.attacks.pgd import create_pgd_attack
+from src.pruning.pruning import PruningManager
 from src.evaluation.baselines import evaluate_all_baselines
 from src.evaluation.metrics import compute_all_metrics, print_metrics
 
@@ -69,8 +72,63 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--load-baseline', type=str, default=None,
                         help='Path to pretrained baseline model to finetune')
+    parser.add_argument('--pruned-model', type=str, default=None,
+                        help='Path to pruned model (lottery ticket) to adversarially train')
     
     return parser.parse_args()
+
+
+def load_pruned_model(model, checkpoint_path, device):
+    """
+    Load a pruned model (lottery ticket) from checkpoint.
+    
+    Args:
+        model: Model instance (architecture must match)
+        checkpoint_path: Path to ticket checkpoint
+        device: Device to load on
+        
+    Returns:
+        model: Loaded model with pruning masks
+        pruning_manager: PruningManager instance
+        info: Checkpoint metadata
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Load model state (includes pruning masks as buffers)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
+    
+    # Create pruning manager and detect pruned layers
+    pruning_manager = PruningManager(model)
+    
+    # Reconstruct pruned params list from model state
+    # PyTorch's prune creates weight_orig and weight_mask buffers
+    import torch.nn.utils.prune as prune
+    for name, module in model.named_modules():
+        if hasattr(module, 'weight_orig') and hasattr(module, 'weight_mask'):
+            pruning_manager._pruned_params.append((module, 'weight'))
+    
+    # Get info
+    info = {
+        'sparsity': checkpoint.get('sparsity', 0.0),
+        'metrics': checkpoint.get('metrics', {}),
+        'round': checkpoint.get('round', -1)
+    }
+    
+    # Verify integrity
+    if pruning_manager.is_pruned():
+        actual_sparsity = pruning_manager.get_sparsity()
+        print(f"[Model] Loaded pruned model from {checkpoint_path}")
+        print(f"[Model] Sparsity: {actual_sparsity['total']:.2%}")
+        if pruning_manager.verify_integrity():
+            print(f"[Model] Pruning integrity: PASS")
+        else:
+            print(f"[Model] Pruning integrity: FAIL - weights may have been corrupted")
+    else:
+        print(f"[Model] Loaded model from {checkpoint_path} (no pruning detected)")
+        pruning_manager = None
+    
+    return model, pruning_manager, info
 
 
 def evaluate_robustness(
@@ -181,7 +239,11 @@ def main():
     config.setdefault('adversarial', {})['mode'] = adv_mode
     
     # Update experiment name
-    config['experiment_name'] = config.get('experiment_name', 'deep_hedging') + f'_adv_{adv_mode}'
+    base_name = config.get('experiment_name', 'deep_hedging')
+    if args.pruned_model:
+        config['experiment_name'] = base_name + f'_adv_{adv_mode}_pruned'
+    else:
+        config['experiment_name'] = base_name + f'_adv_{adv_mode}'
     
     # Set seed
     set_seed(config.get('seed', 42))
@@ -227,8 +289,19 @@ def main():
     model = create_model(config)
     loss_fn = create_loss_function(config)
     
-    # Optionally load pretrained baseline
-    if args.load_baseline:
+    # Initialize pruning manager (will be set if loading pruned model)
+    pruning_manager = None
+    
+    # Load pruned model (lottery ticket) if specified
+    if args.pruned_model:
+        logger.info(f"Loading pruned model (lottery ticket) from {args.pruned_model}")
+        model, pruning_manager, ticket_info = load_pruned_model(model, args.pruned_model, device)
+        logger.info(f"  Ticket sparsity: {ticket_info['sparsity']:.2%}")
+        if ticket_info.get('metrics'):
+            logger.info(f"  Original Sharpe: {ticket_info['metrics'].get('sharpe_ratio', 'N/A')}")
+    
+    # Optionally load pretrained baseline (non-pruned)
+    elif args.load_baseline:
         logger.info(f"Loading pretrained model from {args.load_baseline}")
         model, _ = load_trained_model(model, args.load_baseline, device)
     
@@ -239,7 +312,11 @@ def main():
     # ADVERSARIAL TRAINING
     # =========================================================================
     logger.info("=" * 60)
-    logger.info(f"ADVERSARIAL TRAINING (mode={adv_mode})")
+    if pruning_manager:
+        sparsity = pruning_manager.get_sparsity().get('total', 0)
+        logger.info(f"ADVERSARIAL TRAINING (mode={adv_mode}, sparsity={sparsity:.1%})")
+    else:
+        logger.info(f"ADVERSARIAL TRAINING (mode={adv_mode})")
     logger.info("=" * 60)
     
     trainer = create_adversarial_trainer(
@@ -247,7 +324,8 @@ def main():
         loss_fn=loss_fn,
         config=config,
         device=device,
-        experiment_dir=str(experiment_dir)
+        experiment_dir=str(experiment_dir),
+        pruning_manager=pruning_manager
     )
     
     # Resume if requested
@@ -273,6 +351,16 @@ def main():
     
     # Load best model
     trainer.load_checkpoint('best')
+    
+    # Verify pruning integrity after training (if pruned)
+    if pruning_manager:
+        if pruning_manager.verify_integrity():
+            logger.info("Pruning integrity after adversarial training: PASS")
+        else:
+            logger.warning("Pruning integrity after adversarial training: FAIL")
+        
+        final_sparsity = pruning_manager.get_sparsity()
+        logger.info(f"Final sparsity: {final_sparsity['total']:.2%}")
     
     robustness_results = evaluate_robustness(
         model, loss_fn, test_loader, config, device, logger
@@ -313,6 +401,13 @@ def main():
         'robustness': robustness_results,
         'config': config
     }
+    
+    # Add pruning info if applicable
+    if pruning_manager:
+        final_results['pruning'] = {
+            'sparsity': pruning_manager.get_sparsity(),
+            'integrity': pruning_manager.verify_integrity()
+        }
     
     logger.save_results(final_results, 'final_results.json')
     logger.finalize()

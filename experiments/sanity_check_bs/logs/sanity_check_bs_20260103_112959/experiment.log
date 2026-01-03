@@ -1,0 +1,233 @@
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | Experiment 'sanity_check_bs' started
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | Log directory: experiments/sanity_check_bs_88757fb5/logs/sanity_check_bs_20260103_112959
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | Configuration saved to experiments/sanity_check_bs_88757fb5/logs/sanity_check_bs_20260103_112959/config.json
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | EXPERIMENT CONFIGURATION
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | experiment_name: sanity_check_bs
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | caching:
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs |   enabled: True
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs |   directory: ./cache_sanity
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs |   mode: on
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs | checkpointing:
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs |   enabled: True
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs |   directory: ./checkpoints
+2026-01-03 11:29:59,018 | INFO | sanity_check_bs |   save_freq: 10
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   keep_last: 1
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs | data:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   heston:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     S_0: 100.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     K: 100.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     r: 0.02
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     mu: 0.02
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     v_0: 0.04
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     kappa: 1.5768
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     theta: 0.04
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     xi: 1e-10
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     rho: -0.5711
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   n_train: 100000
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   n_val: 15000
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   n_test: 15000
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   T: 0.0833
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   n_steps: 30
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   dt: 0.002777
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   transaction_cost:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     c_prop: 0.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   seeds:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     train: 100
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     val: 101
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     test: 102
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs | model:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   input_dim: 5
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   recurrent_dim: 3
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   hidden_dims: [64, 64, 32]
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   dropout_rates: [0.0, 0.0, 0.0]
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   use_batch_norm: False
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   activation: relu
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs | training:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   optimizer_name: adam
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   learning_rate: 0.005
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   weight_decay: 0.0001
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   epochs: 300
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   batch_size: 8192
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   loss_type: entropic
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   risk_aversion: 1.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   cvar_alpha: 0.05
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   patience: 30
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   min_delta: 1e-06
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   clip_grad_norm: 1.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   lr_scheduler: cosine
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   lr_step_size: 50
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   lr_gamma: 0.5
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs | pruning:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   sparsities: []
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   target_sparsity: 0.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   method: magnitude
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   iterative: False
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   num_iterations: 0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   exclude_output: True
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   pruning_lr: 0.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   retrain_lr: 0.0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   retrain_epochs: 0
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs | attacks:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |   fgsm:
+2026-01-03 11:29:59,019 | INFO | sanity_check_bs |     epsilon_S: 0.0
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   pgd:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     epsilon_S: 0.0
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   stress:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     epsilon_S: 0.0
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | adversarial_training:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   phase1:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     epochs: 0
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   phase2:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     epochs: 0
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | regime_shifts:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   calm:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     theta: 0.04
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   high_vol:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     theta: 0.09
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   extreme:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |     theta: 0.16
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | evaluation:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   metrics: ['mean_pnl', 'std_pnl', 'sharpe_ratio', 'cvar_005', 'hedging_error_rmse']
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   n_bootstrap: 100
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | logging:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   use_tensorboard: False
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   tensorboard_dir: ./runs_sanity
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   print_freq: 10
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   save_figures: True
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   figures_dir: ./figures_sanity
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | compute:
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   device: auto
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   num_workers: 0
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs |   pin_memory: True
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | STEP 1: Data Generation
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:29:59,020 | INFO | sanity_check_bs | Loading/generating training data...
+2026-01-03 11:30:01,619 | INFO | sanity_check_bs |   Training: 100000 paths, 31 steps
+2026-01-03 11:30:01,619 | INFO | sanity_check_bs | Loading/generating validation data...
+2026-01-03 11:30:01,995 | INFO | sanity_check_bs |   Validation: 15000 paths
+2026-01-03 11:30:01,995 | INFO | sanity_check_bs | Loading/generating test data...
+2026-01-03 11:30:02,374 | INFO | sanity_check_bs |   Test: 15000 paths
+2026-01-03 11:30:02,382 | INFO | sanity_check_bs | Created dataloaders with batch_size=8192
+2026-01-03 11:30:02,382 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:30:02,382 | INFO | sanity_check_bs | STEP 2: Baseline Evaluation
+2026-01-03 11:30:02,382 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs | Baseline: delta_hedging_const_vol:
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   mean_pnl: -2.297591
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   std_pnl: 0.360733
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   min_pnl: -4.521641
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   max_pnl: -0.770764
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   cvar_05: -3.130930
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   sharpe_ratio: -6.369230
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   median_pnl: -2.295829
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs | Baseline: delta_hedging_inst_vol:
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   mean_pnl: -2.297591
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   std_pnl: 0.360733
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   min_pnl: -4.521641
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   max_pnl: -0.770764
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   cvar_05: -3.130930
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   sharpe_ratio: -6.369230
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   median_pnl: -2.295829
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs | Baseline: no_hedging:
+2026-01-03 11:30:02,423 | INFO | sanity_check_bs |   mean_pnl: -2.351608
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   std_pnl: 3.492669
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   min_pnl: -27.546118
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   max_pnl: -0.000000
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   cvar_05: -12.503998
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   sharpe_ratio: -0.673298
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs | Baseline: static_delta_0.5:
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   mean_pnl: -2.278054
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   std_pnl: 1.732653
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   min_pnl: -13.773059
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   max_pnl: -0.000008
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   cvar_05: -6.716806
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   sharpe_ratio: -1.314778
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   fixed_delta: 0.500000
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs | Baseline: static_delta_1.0:
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   mean_pnl: -2.204500
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   std_pnl: 3.190275
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   min_pnl: -19.586601
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   max_pnl: 0.000000
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   cvar_05: -11.141587
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   sharpe_ratio: -0.691006
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs |   fixed_delta: 1.000000
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs | STEP 3: Model Creation
+2026-01-03 11:30:02,424 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | MODEL ARCHITECTURE
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | ----------------------------------------
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | DeepHedgingNetwork Summary
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Exogenous features: 5
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Recurrent features: 3
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Total input dim: 8
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Hidden dims: [64, 64, 32]
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Use batch norm: False
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Dropout rates: [0.0, 0.0, 0.0]
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Total parameters: 6,850
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Weight parameters: 6,688
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Current sparsity: 0.00%
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | Learned premium y: 0.000000
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:30:02,428 | INFO | sanity_check_bs | ----------------------------------------
+2026-01-03 11:30:02,429 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:30:02,429 | INFO | sanity_check_bs | STEP 4: Training
+2026-01-03 11:30:02,429 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,174 | INFO | sanity_check_bs | Training completed in 321.2s
+2026-01-03 11:35:24,175 | INFO | sanity_check_bs | Best validation loss: 2.369917
+2026-01-03 11:35:24,175 | INFO | sanity_check_bs | Final epoch: 113
+2026-01-03 11:35:24,175 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,175 | INFO | sanity_check_bs | STEP 5: Final Evaluation
+2026-01-03 11:35:24,175 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,554 | INFO | sanity_check_bs | Test:
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_mean: -2.295620
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_std: 0.383793
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_min: -4.092000
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_max: -0.688042
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_median: -2.323439
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_skewness: 0.207207
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_kurtosis: 0.762694
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   pnl_iqr: 0.468335
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   var_05: -2.880575
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   var_01: -3.200887
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   cvar_05: -3.085557
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   cvar_01: -3.412329
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   sharpe_ratio: -5.981394
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   sortino_ratio: -0.986311
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   calmar_ratio: -0.000067
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   max_drawdown: -34431.476562
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   hedge_effectiveness: 0.987925
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   tracking_mean_error: 0.000872
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   tracking_std_error: 0.036582
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   tracking_rmse: 0.036593
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   tracking_mae: 0.019403
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs |   tracking_max_error: 0.674788
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | STEP 6: Model vs Baselines Comparison
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ================================================================================
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | COMPARISON TABLE
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ================================================================================
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | Model                         pnl_mean      pnl_std      cvar_05 sharpe_ratio
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | --------------------------------------------------------------------------------
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | Deep Hedging                       nan          nan      -3.0856      -5.9814
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | delta_hedging_const_vol            nan          nan      -3.1309      -6.3692
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | delta_hedging_inst_vol             nan          nan      -3.1309      -6.3692
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | no_hedging                         nan          nan     -12.5040      -0.6733
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | static_delta_0.5                   nan          nan      -6.7168      -1.3148
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | static_delta_1.0                   nan          nan     -11.1416      -0.6910
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ================================================================================
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | STEP 7: Saving Results
+2026-01-03 11:35:24,555 | INFO | sanity_check_bs | ============================================================
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | Results saved to experiments/sanity_check_bs_88757fb5/logs/sanity_check_bs_20260103_112959/final_results.json
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | EXPERIMENT COMPLETED
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | Duration: 0:05:25.540154
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | Log directory: experiments/sanity_check_bs_88757fb5/logs/sanity_check_bs_20260103_112959
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | ==================================================
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | Metrics history saved to experiments/sanity_check_bs_88757fb5/logs/sanity_check_bs_20260103_112959/metrics_history.json
+2026-01-03 11:35:24,558 | INFO | sanity_check_bs | Results saved to experiments/sanity_check_bs_88757fb5/logs/sanity_check_bs_20260103_112959/summary.json

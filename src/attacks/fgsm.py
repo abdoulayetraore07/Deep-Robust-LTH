@@ -114,6 +114,35 @@ class FGSM:
         
         return features_adv.detach(), info
     
+    def attack_with_features(
+        self,
+        features: torch.Tensor,
+        S: torch.Tensor,
+        Z: torch.Tensor,
+        dt: float
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Generate adversarial features using FGSM.
+        
+        This is an alias for attack() with explicit naming to clarify
+        that the input features should already have gradient tracking
+        if computed via compute_features_differentiable().
+        
+        Called by AdversarialTrainer._generate_adversarial().
+        
+        Args:
+            features: Exogenous market features (batch, n_steps, n_features)
+                     Can have requires_grad=True for gradient flow
+            S: Stock prices (batch, n_steps)
+            Z: Option payoff (batch,)
+            dt: Time step
+            
+        Returns:
+            features_adv: Adversarial features (batch, n_steps, n_features)
+            info: Attack statistics
+        """
+        return self.attack(features, S, Z, dt)
+    
     def attack_batch(
         self,
         dataloader: torch.utils.data.DataLoader,

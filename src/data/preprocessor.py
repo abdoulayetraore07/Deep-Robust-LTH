@@ -11,6 +11,10 @@ Exogenous features (5):
     3. sqrt(v_t)              - Volatility
     4. v_t - v_{t-1}          - Variance change
     5. (T - t*dt) / T         - Normalized time to maturity
+
+Two versions available:
+    - compute_features(): Standard version, detached (for training)
+    - compute_features_differentiable(): Gradient-enabled (for adversarial attacks)
 """
 
 import numpy as np
@@ -31,6 +35,9 @@ def compute_features(
 ) -> Union[np.ndarray, torch.Tensor]:
     """
     Compute exogenous market features from Heston paths.
+    
+    NOTE: This version detaches from computation graph for efficiency.
+    For adversarial attacks, use compute_features_differentiable() instead.
     
     These are the 5 features that do NOT depend on the model's actions:
         1. log(S_t / K)           - Log-moneyness
@@ -58,6 +65,73 @@ def compute_features(
         return _compute_features_torch(S, v, K, T, dt)
     else:
         return _compute_features_numpy(S, v, K, T, dt)
+
+
+def compute_features_differentiable(
+    S: torch.Tensor,
+    v: torch.Tensor,
+    K: float,
+    T: float,
+    dt: float
+) -> torch.Tensor:
+    """
+    Compute features while maintaining gradient flow.
+    
+    USE THIS FOR ADVERSARIAL ATTACKS (FGSM, PGD).
+    
+    The key difference from compute_features():
+    - Does NOT use torch.no_grad()
+    - Does NOT detach tensors
+    - Gradients can flow back through feature computation
+    
+    Args:
+        S: Stock prices (n_paths, n_steps) - MUST be torch tensor
+        v: Variances (n_paths, n_steps) - MUST be torch tensor
+        K: Strike price
+        T: Time to maturity
+        dt: Time step
+        
+    Returns:
+        features: (n_paths, n_steps, 5) - maintains gradient connection
+    """
+    if not isinstance(S, torch.Tensor):
+        raise TypeError("S must be a torch.Tensor for differentiable features")
+    if not isinstance(v, torch.Tensor):
+        raise TypeError("v must be a torch.Tensor for differentiable features")
+    
+    device = S.device
+    dtype = S.dtype
+    n_paths, n_steps = S.shape
+    
+    # Feature 1: Log-moneyness (differentiable w.r.t. S)
+    log_moneyness = torch.log(S / K)
+    
+    # Feature 2: Return (differentiable w.r.t. S)
+    # Pad first timestep with zeros
+    returns = torch.zeros(n_paths, n_steps, device=device, dtype=dtype)
+    returns[:, 1:] = (S[:, 1:] - S[:, :-1]) / S[:, :-1]
+    
+    # Feature 3: Volatility (differentiable w.r.t. v)
+    volatility = torch.sqrt(torch.clamp(v, min=1e-8))
+    
+    # Feature 4: Variance change (differentiable w.r.t. v)
+    var_change = torch.zeros(n_paths, n_steps, device=device, dtype=dtype)
+    var_change[:, 1:] = v[:, 1:] - v[:, :-1]
+    
+    # Feature 5: Normalized time to maturity (constants, no gradient needed)
+    time_steps = torch.arange(n_steps, device=device, dtype=dtype)
+    ttm = ((T - time_steps * dt) / T).unsqueeze(0).expand(n_paths, -1)
+    
+    # Stack features: (n_paths, n_steps, 5)
+    features = torch.stack([
+        log_moneyness,
+        returns,
+        volatility,
+        var_change,
+        ttm
+    ], dim=-1)
+    
+    return features
 
 
 def _compute_features_torch(

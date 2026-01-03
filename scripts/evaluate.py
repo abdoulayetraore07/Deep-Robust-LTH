@@ -23,7 +23,7 @@ from src.utils.visualization import (
     plot_pnl_distribution, plot_delta_comparison,
     plot_adversarial_comparison, save_all_figures
 )
-from src.data.heston import get_or_generate_dataset, simulate_heston
+from src.data.heston import get_or_generate_dataset, HestonSimulator
 from src.data.preprocessor import create_dataloaders, compute_features
 from src.models.deep_hedging import create_model
 from src.models.losses import create_loss_function
@@ -151,19 +151,19 @@ def evaluate_stress_test(model, loss_fn, config, device, n_paths=10000):
         regime_config = heston_config.copy()
         regime_config.update(params)
         
-        S, v = simulate_heston(
-            n_paths=n_paths,
-            n_steps=n_steps,
-            S0=regime_config.get('S0', 100.0),
-            v0=params['v0'],
-            kappa=params['kappa'],
-            theta=params['theta'],
-            xi=params['xi'],
-            rho=regime_config.get('rho', -0.7),
-            r=regime_config.get('r', 0.05),
-            T=T
-        )
-        
+        sim_params = {
+            'S_0': regime_config.get('S0', 100.0),
+            'v_0': params['v0'],
+            'kappa': params['kappa'],
+            'theta': params['theta'],
+            'xi': params['xi'],
+            'rho': regime_config.get('rho', -0.7),
+            'r': regime_config.get('r', 0.05),
+        }
+
+        simulator = HestonSimulator(sim_params)
+        S, v = simulator.simulate(n_paths, T, n_steps)
+
         # Compute payoff
         option_type = config.get('option_type', 'call')
         if option_type == 'call':

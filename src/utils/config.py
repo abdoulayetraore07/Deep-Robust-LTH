@@ -206,7 +206,7 @@ def compute_config_hash(config: Dict[str, Any], include_keys: Optional[list] = N
     """
     if include_keys is None:
         # Only hash parameters that affect the model/training
-        include_keys = ['data', 'model', 'training']
+        include_keys = ['data', 'model', 'training', 'pruning']
     
     # Extract relevant config sections
     hash_dict = {}

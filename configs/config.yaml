@@ -32,7 +32,7 @@ data:
     S_0: 100.0        # Initial stock price
     K: 100.0          # Strike (ATM)
     r: 0.02           # Risk-free rate
-    mu: 0.05          # Real-world drift
+    mu: 0.05          # Real-world drift (not used in risk-neutral sim)
     v_0: 0.0175       # Initial variance (~13.2% vol)
     kappa: 1.5768     # Mean reversion speed
     theta: 0.0398     # Long-term variance (~20% vol)
@@ -40,7 +40,7 @@ data:
     rho: -0.5711      # Correlation spot-vol
 
   # Dataset sizes
-  n_train: 100000
+  n_train: 150000     # 100000
   n_val: 15000
   n_test: 15000
 
@@ -71,8 +71,8 @@ model:
   
   # Architecture (from Buehler et al.)
   hidden_dims: [256, 256, 128]
-  dropout_rates: [0.2, 0.2, 0.1]  # Pas de dropout par défaut
-  use_batch_norm: true           # Pas de batch norm par défaut (comme Buehler)
+  dropout_rates: [0.0, 0.0, 0.0]  # Pas de dropout par défaut
+  use_batch_norm: false           # Pas de batch norm par défaut (comme Buehler)
   
   # Activation
   activation: "relu"
@@ -87,8 +87,8 @@ training:
   weight_decay: 0.0
   
   # Training params
-  epochs: 200
-  batch_size: 256
+  epochs: 300 # 300
+  batch_size: 1024 #2048
   
   # Loss function
   loss_type: "cvar"      # 'cvar', 'entropic', 'mean_variance'
@@ -162,14 +162,14 @@ adversarial_training:
   phase1:
     attack_type: "fgsm"
     epochs: 100
-    learning_rate: 0.01
+    learning_rate: 0.001 # Base was 0.01
   
   # Phase 2: PGD retraining with warmup
   phase2:
     attack_type: "pgd"
     epochs: 100
-    lr_start: 0.001      # Warmup start
-    lr_end: 0.01         # Warmup end
+    lr_start: 0.0001      # Warmup start 0.001
+    lr_end: 0.001         # Warmup end 0.01
     warmup_epochs: 20
 
 # ============================================================================

@@ -20,14 +20,14 @@ data:
     S_0: 100.0
     K: 100.0
     r: 0.02
-    mu: 0.05
+    mu: 0.02
     v_0: 0.04
     kappa: 1.5768
     theta: 0.04  # <--- LONG-TERM VARIANCE EGALE A L'INITIALE : BS CASE
     xi: 0.0000000001       # <--- VOLATILITE DE LA VARIANCE PRESQUE NULLE : BS CASE
     rho: -0.5711
   
-  n_train: 100000    # Moins de données suffisent pour apprendre BS
+  n_train: 100000    
   n_val: 15000
   n_test: 15000
   T: 0.0833
@@ -58,10 +58,10 @@ training:
   batch_size: 8192    # Grand batch size pour accélérer l'entraînement
   
   loss_type: "entropic"
-  risk_aversion: 0.0001
+  risk_aversion: 1.0
   cvar_alpha: 0.05
   
-  patience: 50
+  patience: 30
   min_delta: 0.000001
   clip_grad_norm: 1.0
   

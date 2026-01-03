@@ -20,15 +20,19 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Dict, Optional, Tuple, List, Any, TYPE_CHECKING
 import os
 import time
 import json
 from pathlib import Path
 
-from src.data.preprocessor import compute_features
+from src.data.preprocessor import compute_features, compute_features_differentiable
 from src.attacks.fgsm import FGSM
 from src.attacks.pgd import PGD
+
+# Conditional import for type hints only (avoids circular imports)
+if TYPE_CHECKING:
+    from src.pruning.pruning import PruningManager
 
 
 class AdversarialTrainer:
@@ -48,7 +52,8 @@ class AdversarialTrainer:
         model: nn.Module,
         loss_fn: nn.Module,
         config: Dict,
-        device: torch.device
+        device: torch.device,
+        pruning_manager: Optional['PruningManager'] = None
     ):
         """
         Initialize adversarial trainer.
@@ -58,11 +63,13 @@ class AdversarialTrainer:
             loss_fn: Loss function (OCELoss)
             config: Configuration dictionary
             device: torch device
+            pruning_manager: Optional PruningManager for integrity verification
         """
         self.model = model.to(device)
         self.loss_fn = loss_fn
         self.config = config
         self.device = device
+        self.pruning_manager = pruning_manager
         
         # Training config
         train_config = config.get('training', {})
@@ -173,41 +180,58 @@ class AdversarialTrainer:
     
     def _generate_adversarial(
         self,
-        features: torch.Tensor,
         S: torch.Tensor,
+        v: torch.Tensor,
         Z: torch.Tensor
     ) -> torch.Tensor:
         """
         Generate adversarial features based on current mode.
         
+        IMPORTANT: This method computes features internally using 
+        compute_features_differentiable() to ensure gradients can flow
+        back through the feature computation for FGSM/PGD attacks.
+        
         Args:
-            features: Clean features
-            S: Stock prices
+            S: Stock prices (requires_grad will be set internally)
+            v: Variance (requires_grad will be set internally)
             Z: Option payoff
             
         Returns:
-            Adversarial features
+            Adversarial features (n_paths, n_steps, n_features)
         """
         self.model.eval()  # Eval mode for attack generation
         
+        # Create copies with gradient tracking for adversarial perturbation
+        S_adv = S.clone().detach().requires_grad_(True)
+        v_adv = v.clone().detach().requires_grad_(True)
+        
+        # Compute features with gradient flow
+        features = compute_features_differentiable(S_adv, v_adv, self.K, self.T, self.dt)
+        
         if self.adv_mode == 'fgsm':
-            features_adv, _ = self.fgsm_attack.attack(features, S, Z, self.dt)
+            features_adv, _ = self.fgsm_attack.attack_with_features(
+                features, S_adv, Z, self.dt
+            )
         
         elif self.adv_mode in ['pgd', 'mixed']:
-            features_adv, _ = self.pgd_attack.attack(features, S, Z, self.dt)
+            features_adv, _ = self.pgd_attack.attack_with_features(
+                features, S_adv, Z, self.dt
+            )
         
         elif self.adv_mode == 'curriculum':
             # Update epsilon based on curriculum
             current_eps = self._get_current_epsilon()
             self.pgd_attack.epsilon = current_eps
             self.pgd_attack.alpha = current_eps / 4  # Adjust step size
-            features_adv, _ = self.pgd_attack.attack(features, S, Z, self.dt)
+            features_adv, _ = self.pgd_attack.attack_with_features(
+                features, S_adv, Z, self.dt
+            )
         
         else:
-            features_adv = features
+            features_adv = features.detach()
         
         self.model.train()  # Back to train mode
-        return features_adv
+        return features_adv.detach()  # Detach for training step
     
     def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
         """
@@ -234,7 +258,7 @@ class AdversarialTrainer:
             v = v.to(self.device)
             Z = Z.to(self.device)
             
-            # Compute features
+            # Compute features (standard, no gradient needed for clean pass)
             features = compute_features(S, v, self.K, self.T, self.dt)
             
             # Forward pass (clean)
@@ -255,7 +279,7 @@ class AdversarialTrainer:
                 if batch_idx % 2 == 0:
                     loss = loss_clean
                 else:
-                    features_adv = self._generate_adversarial(features, S, Z)
+                    features_adv = self._generate_adversarial(S, v, Z)
                     deltas_adv, y_adv = self.model(features_adv, S)
                     loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
                     loss = loss_adv
@@ -263,7 +287,7 @@ class AdversarialTrainer:
             
             else:
                 # Full adversarial training (fgsm, pgd, curriculum)
-                features_adv = self._generate_adversarial(features, S, Z)
+                features_adv = self._generate_adversarial(S, v, Z)
                 deltas_adv, y_adv = self.model(features_adv, S)
                 loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
                 loss = loss_adv
@@ -277,6 +301,11 @@ class AdversarialTrainer:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
             
             self.optimizer.step()
+            
+            # Verify pruning integrity if pruning manager is active
+            if self.pruning_manager is not None and batch_idx == 0:
+                if not self.pruning_manager.verify_integrity():
+                    print(f"[WARNING] Pruning integrity violation at epoch {self.current_epoch}, batch {batch_idx}")
             
             total_loss += loss.item()
             n_batches += 1
@@ -341,9 +370,10 @@ class AdversarialTrainer:
             pnl_clean = self.loss_fn.compute_pnl(deltas, S, Z, self.dt)
             all_pnls_clean.append(pnl_clean.cpu())
             
-            # Adversarial evaluation
+            # Adversarial evaluation (need to temporarily enable gradients)
             if include_adversarial and self.adv_mode != 'none':
-                features_adv = self._generate_adversarial(features, S, Z)
+                with torch.enable_grad():
+                    features_adv = self._generate_adversarial(S, v, Z)
                 deltas_adv, y_adv = self.model(features_adv, S)
                 loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
                 
@@ -400,10 +430,16 @@ class AdversarialTrainer:
         self.current_epoch = start_epoch
         start_time = time.time()
         
+        # Get sparsity info if pruning is active
+        sparsity_info = ""
+        if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+            sparsity = self.pruning_manager.get_sparsity().get('total', 0)
+            sparsity_info = f", Sparsity: {sparsity:.1%}"
+        
         print(f"\n{'='*70}")
         print(f"Starting ADVERSARIAL training from epoch {start_epoch + 1}")
         print(f"Mode: {self.adv_mode.upper()}")
-        print(f"Loss type: {self.loss_type.upper()}")
+        print(f"Loss type: {self.loss_type.upper()}{sparsity_info}")
         print(f"Device: {self.device}")
         print(f"{'='*70}\n")
         
@@ -422,6 +458,10 @@ class AdversarialTrainer:
             metrics['lr'] = self.optimizer.param_groups[0]['lr']
             metrics['epoch_time'] = time.time() - epoch_start
             
+            # Add sparsity to metrics if pruning is active
+            if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+                metrics['sparsity'] = self.pruning_manager.get_sparsity().get('total', 0)
+            
             self.training_history.append(metrics)
             
             # Check for improvement (use clean val loss for model selection)
@@ -437,6 +477,10 @@ class AdversarialTrainer:
                 improved = ""
             
             # Logging - show PnL Mean and Std for both loss types
+            sparsity_str = ""
+            if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+                sparsity_str = f" | Sp: {metrics.get('sparsity', 0):.1%}"
+            
             log_str = (
                 f"Epoch {epoch + 1:3d}/{self.epochs} | "
                 f"Loss: {train_metrics['train_loss']:.4f} | "
@@ -452,7 +496,7 @@ class AdversarialTrainer:
             if self.adv_mode == 'curriculum':
                 log_str += f" | ε: {self._get_current_epsilon():.4f}"
             
-            log_str += f" | Time: {metrics['epoch_time']:.1f}s{improved}"
+            log_str += f"{sparsity_str} | Time: {metrics['epoch_time']:.1f}s{improved}"
             print(log_str)
             
             # Periodic checkpoint
@@ -482,6 +526,11 @@ class AdversarialTrainer:
                 print(f"Implied price (from -PnL Mean): {-final_pnl_mean:.4f}")
             else:
                 print(f"Learned premium y: {final_premium:.4f}")
+            
+            # Print final sparsity if pruning is active
+            if self.pruning_manager is not None and self.pruning_manager.is_pruned():
+                final_sparsity = self.training_history[-1].get('sparsity', 0)
+                print(f"Final sparsity: {final_sparsity:.2%}")
         print(f"{'='*70}\n")
         
         return {
@@ -527,7 +576,8 @@ def create_adversarial_trainer(
     loss_fn: nn.Module,
     config: Dict,
     device: torch.device,
-    experiment_dir: Optional[str] = None
+    experiment_dir: Optional[str] = None,
+    pruning_manager: Optional['PruningManager'] = None
 ) -> AdversarialTrainer:
     """
     Factory function to create AdversarialTrainer.
@@ -538,6 +588,7 @@ def create_adversarial_trainer(
         config: Configuration
         device: torch device
         experiment_dir: Override checkpoint directory
+        pruning_manager: Optional PruningManager for integrity verification
         
     Returns:
         AdversarialTrainer instance
@@ -547,7 +598,7 @@ def create_adversarial_trainer(
             config['checkpointing'] = {}
         config['checkpointing']['directory'] = os.path.join(experiment_dir, 'checkpoints')
     
-    trainer = AdversarialTrainer(model, loss_fn, config, device)
+    trainer = AdversarialTrainer(model, loss_fn, config, device, pruning_manager=pruning_manager)
     
     adv_mode = config.get('adversarial', {}).get('mode', 'none')
     print(f"[AdvTrainer] Created with mode: {adv_mode.upper()}")
