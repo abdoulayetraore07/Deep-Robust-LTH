@@ -220,29 +220,43 @@ class PruningManager:
         sparsities = {}
         total_zeros = 0
         total_params = 0
+        counted_modules = set()
         
-        for name, param in self.model.named_parameters():
-            if 'weight' in name and 'mask' not in name and '_orig' not in name:
-                zeros = (param.data.abs() < 1e-8).sum().item()
-                total = param.numel()
-                sparsities[name] = zeros / total
-                total_zeros += zeros
-                total_params += total
-        
-        # Also check effective weights for pruned modules
+        # For pruned modules, check the effective weight (with mask applied)
         for module, param_name in self._pruned_params:
+            # Get effective weight (mask is applied via forward hook)
             weight = getattr(module, param_name)
             zeros = (weight.data.abs() < 1e-8).sum().item()
             total = weight.numel()
             
+            # Get full name for reporting
             for n, m in self.model.named_modules():
                 if m is module:
                     full_name = f"{n}.{param_name}" if n else param_name
                     sparsities[full_name] = zeros / total
+                    counted_modules.add(id(module))
                     break
             
-            # Update totals (avoid double counting)
-            if total_params == 0:
+            total_zeros += zeros
+            total_params += total
+        
+        # For non-pruned modules, check regular parameters
+        for name, param in self.model.named_parameters():
+            if 'weight' in name and 'mask' not in name and '_orig' not in name:
+                # Find the module this parameter belongs to
+                module_name = '.'.join(name.split('.')[:-1])
+                module = self.model
+                if module_name:
+                    for part in module_name.split('.'):
+                        module = getattr(module, part)
+                
+                # Skip if already counted via pruned params
+                if id(module) in counted_modules:
+                    continue
+                
+                zeros = (param.data.abs() < 1e-8).sum().item()
+                total = param.numel()
+                sparsities[name] = zeros / total
                 total_zeros += zeros
                 total_params += total
         
@@ -497,10 +511,17 @@ def create_pruning_manager(
     pruning_config = config.get('pruning', {})
     exclude_layers = pruning_config.get('exclude_layers', [])
     
-    # Add common exclusions
     if pruning_config.get('exclude_output', True):
-        # Exclude the last layer (output layer)
-        exclude_layers.append('layers.' + str(len(list(model.modules())) - 1))
+    # Exclude the last layer (output layer)
+    # model.layers is the nn.Sequential containing all layers
+        if hasattr(model, 'layers') and isinstance(model.layers, nn.Sequential):
+            last_idx = len(model.layers) - 1
+            exclude_layers.append(f'layers.{last_idx}')
+        else:
+            # Fallback: find last Linear layer
+            linear_names = [n for n, m in model.named_modules() if isinstance(m, nn.Linear)]
+            if linear_names:
+                exclude_layers.append(linear_names[-1])
     
     pm = PruningManager(model, exclude_layers=exclude_layers)
     

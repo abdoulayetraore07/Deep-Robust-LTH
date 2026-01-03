@@ -1,8 +1,0 @@
-{
-  "experiment_name": "sanity_check_bs",
-  "start_time": "2026-01-03T11:29:59.018214",
-  "end_time": "2026-01-03T11:35:24.558368",
-  "duration_seconds": 325.540154,
-  "best_metrics": {},
-  "total_epochs": 0
-}

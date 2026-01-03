@@ -7,9 +7,47 @@
 │   ├── adversarial
 │   ├── adversarial_training
 │   ├── baseline
+│   │   ├── checkpoints
+│   │   │   ├── best.pt
+│   │   │   ├── epoch_40.pt
+│   │   │   ├── epoch_50.pt
+│   │   │   ├── epoch_60.pt
+│   │   │   ├── latest.pt
+│   │   │   └── training_history.json
+│   │   ├── init_weights.pt
+│   │   └── metrics.json
 │   ├── pruning
-│   └── regime_shifts
+│   │   └── lr_0.001
+│   │       ├── checkpoints
+│   │       │   ├── best.pt
+│   │       │   └── training_history.json
+│   │       └── dense_checkpoints
+│   │           ├── best.pt
+│   │           ├── epoch_10.pt
+│   │           ├── latest.pt
+│   │           └── training_history.json
+│   ├── regime_shifts
+│   └── sanity_check_bs
+│       ├── checkpoints
+│       │   ├── best.pt
+│       │   ├── epoch_90.pt
+│       │   ├── latest.pt
+│       │   └── training_history.json
+│       ├── config_hash.txt
+│       ├── config.yaml
+│       └── logs
+│           └── sanity_check_bs_20260103_112959
+│               ├── config.json
+│               ├── experiment.log
+│               ├── final_results.json
+│               ├── metrics_history.json
+│               └── summary.json
 ├── figures
+│   ├── baseline_pnl_distribution.pdf
+│   ├── baseline_training_curves.pdf
+│   ├── call_payoff_distribution.pdf
+│   ├── heston_sample_paths.pdf
+│   └── heston_terminal_distributions.pdf
 ├── notebooks
 │   ├── 00_data_exploration.ipynb
 │   ├── 01_baseline_deep_hedging.ipynb
@@ -17,7 +55,12 @@
 │   ├── 03_adversarial_attacks.ipynb
 │   ├── 04_regime_shifts.ipynb
 │   ├── 05_adversarial_training.ipynb
-│   └── 06_interpretation.ipynb
+│   ├── 06_interpretation.ipynb
+│   ├── cache
+│   │   ├── test_c0f922ca.npz
+│   │   ├── train_146f79df.npz
+│   │   └── val_2bd7a7b3.npz
+│   └── checkpoints
 ├── README.md
 ├── requirements.txt
 ├── scripts
@@ -39,6 +82,10 @@
     │   └── preprocessor.py
     ├── evaluation
     │   ├── __init__.py
+    │   ├── __pycache__
+    │   │   ├── __init__.cpython-310.pyc
+    │   │   ├── baselines.cpython-310.pyc
+    │   │   └── metrics.cpython-310.pyc
     │   ├── baselines.py
     │   └── metrics.py
     ├── models
@@ -55,4 +102,4 @@
         ├── logging.py
         └── visualization.py
 
-18 directories, 38 files
+29 directories, 74 files

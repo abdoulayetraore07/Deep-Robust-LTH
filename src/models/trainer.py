@@ -73,7 +73,7 @@ class Trainer:
         self.epochs = train_config.get('epochs', 100)
         self.lr = train_config.get('learning_rate', 1e-3)
         self.weight_decay = train_config.get('weight_decay', 0.0)
-        self.grad_clip = train_config.get('gradient_clip', 1.0)
+        self.grad_clip = train_config.get('clip_grad_norm', train_config.get('gradient_clip', 1.0))
         self.patience = train_config.get('patience', 20)
         self.min_delta = train_config.get('min_delta', 1e-6)
         
@@ -108,6 +108,8 @@ class Trainer:
         
         # Learning rate scheduler (optional)
         scheduler_config = train_config.get('scheduler', {})
+        lr_scheduler_type = train_config.get('lr_scheduler', None)
+
         if scheduler_config.get('enabled', False):
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
@@ -116,9 +118,21 @@ class Trainer:
                 patience=scheduler_config.get('patience', 10),
                 min_lr=scheduler_config.get('min_lr', 1e-6)
             )
+        elif lr_scheduler_type == 'cosine':
+            self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=self.epochs,
+                eta_min=train_config.get('min_lr', 1e-6)
+            )
+        elif lr_scheduler_type == 'step':
+            self.scheduler = optim.lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=train_config.get('lr_step_size', 50),
+                gamma=train_config.get('lr_gamma', 0.5)
+            )
         else:
             self.scheduler = None
-        
+
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
@@ -297,7 +311,10 @@ class Trainer:
             
             # Update learning rate scheduler
             if self.scheduler is not None:
-                self.scheduler.step(val_metrics['val_loss'])
+                if isinstance(self.scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(val_metrics['val_loss'])
+                else:
+                    self.scheduler.step()
             
             # Combine metrics
             metrics = {**train_metrics, **val_metrics, 'epoch': epoch + 1}

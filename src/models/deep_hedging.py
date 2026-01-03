@@ -63,6 +63,7 @@ class DeepHedgingNetwork(nn.Module):
         self.hidden_dims = config['hidden_dims']
         self.dropout_rates = config.get('dropout_rates', [0.0] * len(self.hidden_dims))
         self.use_batch_norm = config.get('use_batch_norm', False)
+        self.config = config  # Store config for later use
         activation_name = config.get('activation', 'relu')
         
         # Total input dim = exogenous features + recurrent features
@@ -110,7 +111,7 @@ class DeepHedgingNetwork(nn.Module):
                 layers.append(nn.BatchNorm1d(hidden_dim))
             
             # Activation
-            layers.append(self._get_activation('relu'))  # Use ReLU for hidden layers
+            layers.append(self._get_activation(self.config.get('activation', 'relu')))
             
             # Dropout (optional)
             if dropout_rate > 0:

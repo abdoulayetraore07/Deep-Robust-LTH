@@ -76,7 +76,7 @@ class AdversarialTrainer:
         self.epochs = train_config.get('epochs', 100)
         self.lr = train_config.get('learning_rate', 1e-3)
         self.weight_decay = train_config.get('weight_decay', 0.0)
-        self.grad_clip = train_config.get('gradient_clip', 1.0)
+        self.grad_clip = train_config.get('clip_grad_norm', train_config.get('gradient_clip', 1.0))
         self.patience = train_config.get('patience', 20)
         
         # Loss type for appropriate logging
