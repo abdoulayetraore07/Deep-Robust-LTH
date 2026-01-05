@@ -40,14 +40,14 @@ data:
     rho: -0.5711      # Correlation spot-vol
 
   # Dataset sizes
-  n_train: 150000     # 100000
-  n_val: 15000
-  n_test: 15000
+  n_train: 60000     # Number of training samples
+  n_val: 15000        # Number of validation samples (1%)
+  n_test: 15000       # Number of test samples
 
   # Simulation parameters
-  T: 0.0833           # 1 month in years
-  n_steps: 30         # Daily steps
-  dt: 0.002777        # T / n_steps
+  T: 0.25             # 3 month in years     
+  n_steps: 540        # Hedge per day (540 steps for 3 months with 4h steps)
+  dt: 0.000463         # T / n_steps 
 
   # Transaction costs
   transaction_cost:
@@ -70,12 +70,12 @@ model:
   # Total network input = 5 + 3 = 8
   
   # Architecture (from Buehler et al.)
-  hidden_dims: [256, 256, 128]
+  hidden_dims: [128, 64, 32]      # [256, 256, 128] or [50, 50, 20]
   dropout_rates: [0.0, 0.0, 0.0]  # Pas de dropout par défaut
   use_batch_norm: false           # Pas de batch norm par défaut (comme Buehler)
   
   # Activation
-  activation: "relu"
+  activation: "tanh"   # 'relu', 'leaky_relu', 'tanh'
 
 # ============================================================================
 # TRAINING CONFIGURATION
@@ -83,12 +83,12 @@ model:
 training:
   # Optimizer
   optimizer_name: "adam"
-  learning_rate: 0.001
+  learning_rate: 0.001   # ou 0.01 (avant)
   weight_decay: 0.0
   
   # Training params
-  epochs: 150 
-  batch_size: 1024 
+  epochs: 300 
+  batch_size: 256        # 1024 ou 2048 possible     
   
   # Loss function
   loss_type: "cvar"      # 'cvar', 'entropic', 'mean_variance'
@@ -102,16 +102,22 @@ training:
   clip_grad_norm: 1.0
   
   # Learning rate scheduler
-  lr_scheduler: cosine     # 'cosine', 'step', or null
-  lr_step_size: 50
-  lr_gamma: 0.5
+  scheduler:
+    enabled: false        # If true, use PlateauLR, however we use lr_scheduler below
+    mode: "min"
+    factor: 0.5
+    patience: 10
+    min_lr: 0.000001
+    lr_scheduler: cosine     # 'cosine', 'step', or null
+    lr_step_size: 50
+    lr_gamma: 0.5
 
 # ============================================================================
 # PRUNING CONFIGURATION (Lottery Ticket Hypothesis)
 # ============================================================================
 pruning:
   # Sparsity levels to test
-  sparsities: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+  sparsities: [0.5, 0.7, 0.8, 0.9, 0.95]
   
   # Default target sparsity
   target_sparsity: 0.8
@@ -120,7 +126,7 @@ pruning:
   method: "magnitude"    # 'magnitude', 'random'
   
   # One-shot vs iterative
-  iterative: false
+  iterative: false       # Ignored in practice for now, always iterative
   num_iterations: 5      # If iterative=true
   
   # Exclude output layer from pruning
@@ -129,8 +135,8 @@ pruning:
   # Learning rate for retraining (IMPORTANT for boosting tickets)
   # Use LOW LR for pruning phase, standard LR for retraining
   pruning_lr: 0.0001     # Very low for boosting tickets
-  retrain_lr: 0.001      # Standard for retraining
-  retrain_epochs: 50
+  retrain_lr: 0.001       # (*100) Standard for retraining, 0.001
+  retrain_epochs: 150
 
 # ============================================================================
 # ADVERSARIAL ATTACKS CONFIGURATION
@@ -159,18 +165,28 @@ attacks:
 # ============================================================================
 adversarial_training:
   # Phase 1: FGSM training (to get boosting tickets)
-  phase1:
+  fgsm_phase:
     attack_type: "fgsm"
-    epochs: 100
-    learning_rate: 0.001 # Base was 0.01
+    epochs: 150
+    learning_rate: 0.001  # Standard LR
   
   # Phase 2: PGD retraining with warmup
-  phase2:
+  pgd_phase:
     attack_type: "pgd"
-    epochs: 150
-    lr_start: 0.0005      # Warmup start 0.005
-    lr_end: 0.001         # Warmup end 0.01
-    warmup_epochs: 20
+    epochs: 200
+    lr_start: 0.0002     # Warmup start 
+    lr_end: 0.001        # Warmup end 0.01
+    warmup_epochs: 30
+    epochs_candidates: [50, 150, 200] 
+
+# warmup settings for PGD phase
+warmup:
+  enabled: true
+  lr_start: 0.0002
+  lr_end: 0.001
+  warmup_epochs: 30
+  warmup_type: 'linear'    # ou 'cosine', 'exponential'
+  post_warmup: 'constant'  # ou 'cosine', 'step'
 
 # ============================================================================
 # REGIME SHIFTS CONFIGURATION
@@ -180,16 +196,19 @@ regime_shifts:
   calm:
     theta: 0.0398
     xi: 0.5751
+    v_0: 0.0175
   
   # High volatility regime
   high_vol:
     theta: 0.09          # ~30% long-term vol
     xi: 0.5
+    v_0: 0.04
   
   # Extreme regime
   extreme:
     theta: 0.18          # ~45% long-term vol
     xi: 0.8
+    v_0: 0.08
 
 # ============================================================================
 # EVALUATION CONFIGURATION

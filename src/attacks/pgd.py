@@ -10,6 +10,9 @@ PGD is an iterative version of FGSM:
 
 This is considered the strongest first-order attack and is the
 gold standard for adversarial robustness evaluation.
+
+IMPORTANT: All attack methods use torch.enable_grad() internally to ensure
+gradient computation works even when called from a @torch.no_grad() context.
 """
 
 import torch
@@ -26,6 +29,10 @@ class PGD:
         x_{t+1} = Π_{ε}(x_t + α * sign(∇_x L))
     
     Where Π_{ε} projects back onto the ε-ball around the original input.
+    
+    NOTE: This implementation uses torch.enable_grad() internally,
+    so it works correctly even when called from validation loops
+    decorated with @torch.no_grad().
     """
     
     def __init__(
@@ -116,6 +123,9 @@ class PGD:
         """
         Generate adversarial features using PGD.
         
+        CRITICAL: Uses torch.enable_grad() to ensure gradients work
+        even when called from @torch.no_grad() decorated functions.
+        
         Args:
             features: Exogenous market features (batch, n_steps, n_features)
             S: Stock prices (batch, n_steps) - NOT perturbed
@@ -126,6 +136,10 @@ class PGD:
             features_adv: Adversarial features
             info: Attack statistics
         """
+        # Store original model training state
+        was_training = self.model.training
+        self.model.eval()
+        
         # Store original for projection
         original_features = features.clone().detach()
         
@@ -141,50 +155,55 @@ class PGD:
         best_loss = float('-inf')
         best_delta = delta.clone()
         
-        # Compute clean loss for reference
+        # Compute clean loss for reference (no gradients needed)
         with torch.no_grad():
             deltas_clean, y_clean = self.model(features, S)
             loss_clean, _ = self.loss_fn(deltas_clean, S, Z, y_clean, dt)
             clean_loss_val = loss_clean.item()
         
-        # PGD iterations
-        for step in range(self.num_steps):
-            # Current adversarial features
-            features_adv = original_features + delta
-            features_adv.requires_grad_(True)
-            
-            # Forward pass
-            deltas_pred, y = self.model(features_adv, S)
-            loss, _ = self.loss_fn(deltas_pred, S, Z, y, dt)
-            
-            # Track best
-            if loss.item() > best_loss:
-                best_loss = loss.item()
-                best_delta = delta.clone()
-            
-            # Backward pass
-            loss.backward()
-            
-            # Get gradient
-            grad = features_adv.grad.detach()
-            
-            # Update delta based on norm type
-            if self.norm == 'linf':
-                delta = delta + self.alpha * grad.sign()
-            else:  # l2
-                grad_norm = grad.view(grad.shape[0], -1).norm(p=2, dim=1, keepdim=True)
-                grad_norm = grad_norm.view(grad.shape[0], 1, 1)
-                grad_normalized = grad / (grad_norm + 1e-8)
-                delta = delta + self.alpha * grad_normalized
-            
-            # Project back onto ε-ball
-            delta = self._project(delta, original_features)
-            delta = delta.detach()
+        # =====================================================================
+        # CRITICAL FIX: Use torch.enable_grad() for the entire PGD loop
+        # This ensures gradient computation works even when called from
+        # a @torch.no_grad() context (e.g., validate())
+        # =====================================================================
+        with torch.enable_grad():
+            # PGD iterations
+            for step in range(self.num_steps):
+                # Current adversarial features
+                features_adv = (original_features + delta).requires_grad_(True)
+                
+                # Forward pass
+                deltas_pred, y = self.model(features_adv, S)
+                loss, _ = self.loss_fn(deltas_pred, S, Z, y, dt)
+                
+                # Track best
+                if loss.item() > best_loss:
+                    best_loss = loss.item()
+                    best_delta = delta.clone().detach()
+                
+                # Backward pass
+                loss.backward()
+                
+                # Get gradient
+                grad = features_adv.grad.detach()
+                
+                # Update delta based on norm type
+                if self.norm == 'linf':
+                    delta = delta + self.alpha * grad.sign()
+                else:  # l2
+                    grad_norm = grad.view(grad.shape[0], -1).norm(p=2, dim=1, keepdim=True)
+                    grad_norm = grad_norm.view(grad.shape[0], 1, 1)
+                    grad_normalized = grad / (grad_norm + 1e-8)
+                    delta = delta + self.alpha * grad_normalized
+                
+                # Project back onto ε-ball
+                delta = self._project(delta, original_features)
+                delta = delta.detach()
         
         # Use best adversarial example found
         features_adv = original_features + best_delta
         
-        # Compute final statistics
+        # Compute final statistics (no gradients needed)
         with torch.no_grad():
             deltas_adv, y_adv = self.model(features_adv, S)
             loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, dt)
@@ -201,6 +220,10 @@ class PGD:
                 'epsilon': self.epsilon,
                 'alpha': self.alpha
             }
+        
+        # Restore model training state
+        if was_training:
+            self.model.train()
         
         return features_adv.detach(), info
     
@@ -315,7 +338,7 @@ class PGD:
                 loss_clean, _ = self.loss_fn(deltas_clean, S, Z, y_clean, dt)
                 total_loss_clean += loss_clean.item()
             
-            # Adversarial attack
+            # Adversarial attack (uses enable_grad internally)
             if num_restarts > 1:
                 _, info = self.attack_with_restarts(features, S, Z, dt, num_restarts)
             else:
@@ -398,11 +421,10 @@ class PGDTrainer:
         
         if n_adv > 0:
             # Generate adversarial examples for subset
-            self.model.eval()  # Eval mode for attack
+            # attack() uses enable_grad internally, so this works
             features_adv, attack_info = self.attack.attack(
                 features[:n_adv], S[:n_adv], Z[:n_adv], dt
             )
-            self.model.train()  # Back to train mode
             
             # Combine clean and adversarial
             features_mixed = torch.cat([features_adv, features[n_adv:]], dim=0)

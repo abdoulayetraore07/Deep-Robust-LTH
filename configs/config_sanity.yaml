@@ -23,8 +23,8 @@ data:
     mu: 0.02
     v_0: 0.04
     kappa: 1.5768
-    theta: 0.04  # <--- LONG-TERM VARIANCE EGALE A L'INITIALE : BS CASE
-    xi: 0.0000000001       # <--- VOLATILITE DE LA VARIANCE PRESQUE NULLE : BS CASE
+    theta: 0.04            # LONG-TERM VARIANCE EGALE A L'INITIALE : BS CASE
+    xi: 0.0000000001       # VOLATILITE DE LA VARIANCE PRESQUE NULLE : BS CASE
     rho: -0.5711
   
   n_train: 100000    
@@ -35,7 +35,7 @@ data:
   dt: 0.002777
   
   transaction_cost:
-    c_prop: 0.0     # <--- ZERO COUTS : C'est la clé du sanity check
+    c_prop: 0.0           # ZERO COUTS 
     
   seeds:
     train: 100
@@ -54,7 +54,7 @@ training:
   optimizer_name: "adam"
   learning_rate: 0.005   # Taux d'apprentissage un peu plus élevé
   weight_decay: 0.0001
-  epochs: 300        # 300 epochs suffisent largement
+  epochs: 150        # 150 epochs suffisent largement
   batch_size: 8192    # Grand batch size pour accélérer l'entraînement
   
   loss_type: "entropic"
@@ -65,9 +65,16 @@ training:
   min_delta: 0.000001
   clip_grad_norm: 1.0
   
-  lr_scheduler: "cosine"
-  lr_step_size: 50
-  lr_gamma: 0.5
+  # Learning rate scheduler
+  scheduler:
+    enabled: true        # If true, use PlateauLR
+    mode: "min"
+    factor: 0.5
+    patience: 10
+    min_lr: 0.000001
+    lr_scheduler: cosine     # 'cosine', 'step', or null
+    lr_step_size: 50
+    lr_gamma: 0.5
 
 # Pas besoin des sections pruning/attacks pour ce test simple
 pruning:

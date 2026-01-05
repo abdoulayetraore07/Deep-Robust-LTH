@@ -9,6 +9,9 @@ slightly misleading signals about the market state.
 
 The attack finds the worst-case feature perturbation within an ε-ball
 that maximizes the loss (minimizes hedging performance).
+
+IMPORTANT: All attack methods use torch.enable_grad() internally to ensure
+gradient computation works even when called from a @torch.no_grad() context.
 """
 
 import torch
@@ -24,6 +27,10 @@ class FGSM:
         features_adv = features + ε * sign(∇_features L)
     
     This finds adversarial market conditions that hurt hedging performance.
+    
+    NOTE: This implementation uses torch.enable_grad() internally,
+    so it works correctly even when called from validation loops
+    decorated with @torch.no_grad().
     """
     
     def __init__(
@@ -60,6 +67,9 @@ class FGSM:
         """
         Generate adversarial features using FGSM.
         
+        CRITICAL: Uses torch.enable_grad() to ensure gradients work
+        even when called from @torch.no_grad() decorated functions.
+        
         Args:
             features: Exogenous market features (batch, n_steps, n_features)
             S: Stock prices (batch, n_steps) - NOT perturbed
@@ -70,23 +80,36 @@ class FGSM:
             features_adv: Adversarial features (batch, n_steps, n_features)
             info: Attack statistics
         """
-        # Enable gradient computation for features
-        features_adv = features.clone().detach().requires_grad_(True)
+        # Store original model training state
+        was_training = self.model.training
+        self.model.eval()
         
-        # Forward pass
-        deltas, y = self.model(features_adv, S)
-        
-        # Compute loss (we want to MAXIMIZE this)
-        loss, _ = self.loss_fn(deltas, S, Z, y, dt)
-        
-        # Backward pass to get gradients
-        loss.backward()
-        
-        # Get gradient sign
-        grad_sign = features_adv.grad.sign()
+        # =====================================================================
+        # CRITICAL FIX: Use torch.enable_grad() to ensure gradient computation
+        # works even when called from a @torch.no_grad() context (e.g., validate())
+        # =====================================================================
+        with torch.enable_grad():
+            # Clone and detach, then enable gradients
+            features_adv = features.clone().detach().requires_grad_(True)
+            
+            # Forward pass
+            deltas, y = self.model(features_adv, S)
+            
+            # Compute loss (we want to MAXIMIZE this)
+            loss, _ = self.loss_fn(deltas, S, Z, y, dt)
+            
+            # Store clean loss before backward (while still in grad context)
+            clean_loss_val = loss.item()
+            
+            # Backward pass to get gradients
+            loss.backward()
+            
+            # Get gradient sign
+            grad_sign = features_adv.grad.sign()
         
         # Apply perturbation (maximize loss → add gradient)
-        features_adv = features + self.epsilon * grad_sign
+        # This is outside enable_grad() because we don't need gradients here
+        features_adv = features.detach() + self.epsilon * grad_sign.detach()
         
         # Clip if bounds specified
         if self.clip_min is not None or self.clip_max is not None:
@@ -96,21 +119,25 @@ class FGSM:
                 max=self.clip_max if self.clip_max is not None else float('inf')
             )
         
-        # Compute attack statistics
+        # Compute attack statistics (no gradients needed)
         with torch.no_grad():
             perturbation = features_adv - features
             info = {
                 'perturbation_linf': perturbation.abs().max().item(),
                 'perturbation_l2': perturbation.norm(p=2).item() / features.numel() ** 0.5,
                 'perturbation_mean': perturbation.abs().mean().item(),
-                'original_loss': loss.item()
+                'original_loss': clean_loss_val
             }
             
             # Compute loss on adversarial features
-            deltas_adv, y_adv = self.model(features_adv.detach(), S)
+            deltas_adv, y_adv = self.model(features_adv, S)
             loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, dt)
             info['adversarial_loss'] = loss_adv.item()
-            info['loss_increase'] = loss_adv.item() - loss.item()
+            info['loss_increase'] = loss_adv.item() - clean_loss_val
+        
+        # Restore model training state
+        if was_training:
+            self.model.train()
         
         return features_adv.detach(), info
     
@@ -186,7 +213,7 @@ class FGSM:
                 loss_clean, _ = self.loss_fn(deltas_clean, S, Z, y_clean, dt)
                 total_loss_clean += loss_clean.item()
             
-            # Adversarial attack
+            # Adversarial attack (uses enable_grad internally)
             features_adv, info = self.attack(features, S, Z, dt)
             total_loss_adv += info['adversarial_loss']
             n_batches += 1
@@ -227,24 +254,31 @@ class TargetedFGSM(FGSM):
         dt: float
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Generate adversarial features targeting a specific loss."""
-        features_adv = features.clone().detach().requires_grad_(True)
+        was_training = self.model.training
+        self.model.eval()
         
-        deltas, y = self.model(features_adv, S)
-        loss, _ = self.loss_fn(deltas, S, Z, y, dt)
-        
-        # Minimize |loss - target|
-        target_tensor = torch.tensor(self.target_loss, device=loss.device)
-        loss_diff = (loss - target_tensor).abs()
-        loss_diff.backward()
+        with torch.enable_grad():
+            features_adv = features.clone().detach().requires_grad_(True)
+            
+            deltas, y = self.model(features_adv, S)
+            loss, _ = self.loss_fn(deltas, S, Z, y, dt)
+            
+            original_loss = loss.item()
+            
+            # Minimize |loss - target|
+            target_tensor = torch.tensor(self.target_loss, device=loss.device)
+            loss_diff = (loss - target_tensor).abs()
+            loss_diff.backward()
+            
+            grad_sign = features_adv.grad.sign()
         
         # Move towards target
-        grad_sign = features_adv.grad.sign()
-        if loss.item() < self.target_loss:
+        if original_loss < self.target_loss:
             # Loss too low, increase it
-            features_adv = features + self.epsilon * grad_sign
+            features_adv = features.detach() + self.epsilon * grad_sign.detach()
         else:
             # Loss too high, decrease it
-            features_adv = features - self.epsilon * grad_sign
+            features_adv = features.detach() - self.epsilon * grad_sign.detach()
         
         if self.clip_min is not None or self.clip_max is not None:
             features_adv = torch.clamp(
@@ -255,12 +289,15 @@ class TargetedFGSM(FGSM):
         
         with torch.no_grad():
             info = {
-                'original_loss': loss.item(),
+                'original_loss': original_loss,
                 'target_loss': self.target_loss
             }
-            deltas_adv, y_adv = self.model(features_adv.detach(), S)
+            deltas_adv, y_adv = self.model(features_adv, S)
             loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, dt)
             info['adversarial_loss'] = loss_adv.item()
+        
+        if was_training:
+            self.model.train()
         
         return features_adv.detach(), info
 

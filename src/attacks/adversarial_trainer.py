@@ -11,9 +11,14 @@ Supports multiple training modes:
 4. Curriculum adversarial training (increasing ε)
 5. Mixed training (clean + adversarial batches)
 
-Key insight from "Boosting Tickets" paper:
+Key insight from "Boosting Tickets" paper (Li et al., 2020):
 - Use FGSM to find tickets (fast, captures structure)
 - Use PGD to train final model (strong robustness)
+
+FEATURES:
+- Learning rate warmup support for PGD phase training
+- Automatic gradient enabling for adversarial attacks
+- Compatible with @torch.no_grad() decorated validation
 """
 
 import torch
@@ -24,15 +29,136 @@ from typing import Dict, Optional, Tuple, List, Any, TYPE_CHECKING
 import os
 import time
 import json
+import math
 from pathlib import Path
 
-from src.data.preprocessor import compute_features, compute_features_differentiable
+from src.data.preprocessor import compute_features
 from src.attacks.fgsm import FGSM
 from src.attacks.pgd import PGD
 
 # Conditional import for type hints only (avoids circular imports)
 if TYPE_CHECKING:
     from src.pruning.pruning import PruningManager
+
+
+class WarmupScheduler:
+    """
+    Learning rate warmup scheduler.
+    
+    Supports multiple warmup strategies:
+    - 'linear': Linear warmup from lr_start to lr_end
+    - 'cosine': Cosine annealing warmup
+    - 'exponential': Exponential warmup
+    
+    After warmup, maintains lr_end or transitions to another scheduler.
+    """
+    
+    def __init__(
+        self,
+        optimizer: optim.Optimizer,
+        lr_start: float,
+        lr_end: float,
+        warmup_epochs: int,
+        total_epochs: int,
+        warmup_type: str = 'linear',
+        post_warmup: str = 'constant'
+    ):
+        """
+        Initialize warmup scheduler.
+        
+        Args:
+            optimizer: PyTorch optimizer
+            lr_start: Starting learning rate
+            lr_end: Target learning rate after warmup
+            warmup_epochs: Number of warmup epochs
+            total_epochs: Total training epochs
+            warmup_type: Type of warmup ('linear', 'cosine', 'exponential')
+            post_warmup: LR schedule after warmup ('constant', 'cosine', 'step')
+        """
+        self.optimizer = optimizer
+        self.lr_start = lr_start
+        self.lr_end = lr_end
+        self.warmup_epochs = warmup_epochs
+        self.total_epochs = total_epochs
+        self.warmup_type = warmup_type
+        self.post_warmup = post_warmup
+        self.current_epoch = 0
+        
+        # Set initial LR
+        self._set_lr(lr_start)
+    
+    def _set_lr(self, lr: float):
+        """Set learning rate for all parameter groups."""
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+    
+    def _get_warmup_lr(self, epoch: int) -> float:
+        """Compute warmup learning rate for given epoch."""
+        if epoch >= self.warmup_epochs:
+            return self.lr_end
+        
+        progress = epoch / self.warmup_epochs  # 0 to 1
+        
+        if self.warmup_type == 'linear':
+            return self.lr_start + progress * (self.lr_end - self.lr_start)
+        
+        elif self.warmup_type == 'cosine':
+            return self.lr_start + (self.lr_end - self.lr_start) * (1 - math.cos(math.pi * progress)) / 2
+        
+        elif self.warmup_type == 'exponential':
+            if self.lr_start <= 0:
+                return self.lr_end * progress
+            return self.lr_start * (self.lr_end / self.lr_start) ** progress
+        
+        else:
+            raise ValueError(f"Unknown warmup type: {self.warmup_type}")
+    
+    def _get_post_warmup_lr(self, epoch: int) -> float:
+        """Compute post-warmup learning rate."""
+        if self.post_warmup == 'constant':
+            return self.lr_end
+        
+        elif self.post_warmup == 'cosine':
+            post_epoch = epoch - self.warmup_epochs
+            post_total = self.total_epochs - self.warmup_epochs
+            if post_total <= 0:
+                return self.lr_end
+            progress = post_epoch / post_total
+            return self.lr_end * (1 + math.cos(math.pi * progress)) / 2
+        
+        elif self.post_warmup == 'step':
+            post_epoch = epoch - self.warmup_epochs
+            post_total = self.total_epochs - self.warmup_epochs
+            if post_total <= 0:
+                return self.lr_end
+            progress = post_epoch / post_total
+            if progress >= 0.75:
+                return self.lr_end * 0.01
+            elif progress >= 0.5:
+                return self.lr_end * 0.1
+            return self.lr_end
+        
+        else:
+            return self.lr_end
+    
+    def step(self, epoch: Optional[int] = None):
+        """Update learning rate based on epoch."""
+        if epoch is not None:
+            self.current_epoch = epoch
+        else:
+            self.current_epoch += 1
+        
+        if self.current_epoch < self.warmup_epochs:
+            lr = self._get_warmup_lr(self.current_epoch)
+        else:
+            lr = self._get_post_warmup_lr(self.current_epoch)
+        
+        self._set_lr(lr)
+        return lr
+    
+    def get_lr(self) -> float:
+        """Get current learning rate."""
+        return self.optimizer.param_groups[0]['lr']
 
 
 class AdversarialTrainer:
@@ -45,6 +171,10 @@ class AdversarialTrainer:
     - 'pgd': PGD adversarial training
     - 'curriculum': Gradually increasing ε
     - 'mixed': Mix of clean and adversarial examples
+    
+    FEATURES:
+    - Learning rate warmup via warmup_config parameter
+    - Attack methods use enable_grad() internally, so validation works correctly
     """
     
     def __init__(
@@ -82,16 +212,13 @@ class AdversarialTrainer:
         # Loss type for appropriate logging
         self.loss_type = train_config.get('loss_type', 'cvar')
         
-        # Alpha for CVaR monitoring (independent of loss function)
-        # This ensures we can always compute CVaR metrics for comparison,
-        # regardless of which loss function is used for training
+        # Alpha for CVaR monitoring
         self.monitoring_alpha = train_config.get('cvar_alpha', 0.05)
         
         # Adversarial config
         adv_config = config.get('adversarial', {})
-        self.adv_mode = adv_config.get('mode', 'none')  # none, fgsm, pgd, curriculum, mixed
-        self.mix_ratio = adv_config.get('mix_ratio', 0.5)  # Ratio of adversarial examples
-        
+        self.adv_mode = adv_config.get('mode', 'none')
+        self.mix_ratio = adv_config.get('mix_ratio', 0.5)
         
         # Heston config for feature computation
         heston_config = config['data']['heston']
@@ -113,12 +240,44 @@ class AdversarialTrainer:
             weight_decay=self.weight_decay
         )
         
+        # =====================================================================
+        # Learning Rate Warmup Configuration
+        # =====================================================================
+        self.warmup_scheduler = None
+        warmup_config = config.get('warmup', None)
+        
+        # Also check adversarial_training config for PGD phase warmup
+        if warmup_config is None and self.adv_mode == 'pgd':
+            adv_training_config = config.get('adversarial_training', {}).get('pgd_phase', {})
+            if 'lr_start' in adv_training_config and 'warmup_epochs' in adv_training_config:
+                warmup_config = {
+                    'enabled': True,
+                    'lr_start': adv_training_config.get('lr_start', self.lr * 0.1),
+                    'lr_end': adv_training_config.get('lr_end', self.lr),
+                    'warmup_epochs': adv_training_config.get('warmup_epochs', 10),
+                    'warmup_type': adv_training_config.get('warmup_type', 'linear'),
+                    'post_warmup': adv_training_config.get('post_warmup', 'constant')
+                }
+        
+        if warmup_config is not None and warmup_config.get('enabled', True):
+            self.warmup_scheduler = WarmupScheduler(
+                optimizer=self.optimizer,
+                lr_start=warmup_config.get('lr_start', self.lr * 0.1),
+                lr_end=warmup_config.get('lr_end', self.lr),
+                warmup_epochs=warmup_config.get('warmup_epochs', 10),
+                total_epochs=self.epochs,
+                warmup_type=warmup_config.get('warmup_type', 'linear'),
+                post_warmup=warmup_config.get('post_warmup', 'constant')
+            )
+            print(f"[AdvTrainer] Warmup enabled: {warmup_config.get('lr_start', self.lr * 0.1):.6f} -> "
+                  f"{warmup_config.get('lr_end', self.lr):.6f} over {warmup_config.get('warmup_epochs', 10)} epochs")
+        
         # Initialize attacks based on mode
         self.fgsm_attack = None
         self.pgd_attack = None
         self._init_attacks(adv_config)
         
-        # Curriculum schedule (for curriculum mode)
+        # Curriculum schedule
         self.curriculum_schedule = adv_config.get('curriculum', {
             'start_epsilon': 0.01,
             'end_epsilon': 0.1,
@@ -172,7 +331,6 @@ class AdversarialTrainer:
         warmup = schedule['warmup_epochs']
         
         if self.current_epoch < warmup:
-            # Linear warmup
             progress = self.current_epoch / warmup
             return start_eps + progress * (end_eps - start_eps)
         else:
@@ -180,69 +338,43 @@ class AdversarialTrainer:
     
     def _generate_adversarial(
         self,
+        features: torch.Tensor,
         S: torch.Tensor,
-        v: torch.Tensor,
         Z: torch.Tensor
     ) -> torch.Tensor:
         """
         Generate adversarial features based on current mode.
         
-        IMPORTANT: This method computes features internally using 
-        compute_features_differentiable() to ensure gradients can flow
-        back through the feature computation for FGSM/PGD attacks.
+        NOTE: Attack methods use torch.enable_grad() internally,
+        so this works correctly even when called from @torch.no_grad() context.
         
         Args:
-            S: Stock prices (requires_grad will be set internally)
-            v: Variance (requires_grad will be set internally)
+            features: Pre-computed features
+            S: Stock prices
             Z: Option payoff
             
         Returns:
             Adversarial features (n_paths, n_steps, n_features)
         """
-        self.model.eval()  # Eval mode for attack generation
-        
-        # Create copies with gradient tracking for adversarial perturbation
-        S_adv = S.clone().detach().requires_grad_(True)
-        v_adv = v.clone().detach().requires_grad_(True)
-        
-        # Compute features with gradient flow
-        features = compute_features_differentiable(S_adv, v_adv, self.K, self.T, self.dt)
-        
         if self.adv_mode == 'fgsm':
-            features_adv, _ = self.fgsm_attack.attack_with_features(
-                features, S_adv, Z, self.dt
-            )
+            features_adv, _ = self.fgsm_attack.attack(features, S, Z, self.dt)
         
         elif self.adv_mode in ['pgd', 'mixed']:
-            features_adv, _ = self.pgd_attack.attack_with_features(
-                features, S_adv, Z, self.dt
-            )
+            features_adv, _ = self.pgd_attack.attack(features, S, Z, self.dt)
         
         elif self.adv_mode == 'curriculum':
-            # Update epsilon based on curriculum
             current_eps = self._get_current_epsilon()
             self.pgd_attack.epsilon = current_eps
-            self.pgd_attack.alpha = current_eps / 4  # Adjust step size
-            features_adv, _ = self.pgd_attack.attack_with_features(
-                features, S_adv, Z, self.dt
-            )
+            self.pgd_attack.alpha = current_eps / 4
+            features_adv, _ = self.pgd_attack.attack(features, S, Z, self.dt)
         
         else:
             features_adv = features.detach()
         
-        self.model.train()  # Back to train mode
-        return features_adv.detach()  # Detach for training step
+        return features_adv.detach()
     
     def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
-        """
-        Train for one epoch with adversarial training.
-        
-        Args:
-            train_loader: Training data loader
-            
-        Returns:
-            Training metrics
-        """
+        """Train for one epoch with adversarial training."""
         self.model.train()
         
         total_loss = 0.0
@@ -258,7 +390,6 @@ class AdversarialTrainer:
             v = v.to(self.device)
             Z = Z.to(self.device)
             
-            # Compute features (standard, no gradient needed for clean pass)
             features = compute_features(S, v, self.K, self.T, self.dt)
             
             # Forward pass (clean)
@@ -275,19 +406,17 @@ class AdversarialTrainer:
                 loss = loss_clean
             
             elif self.adv_mode == 'mixed':
-                # Mixed training: half clean, half adversarial
                 if batch_idx % 2 == 0:
                     loss = loss_clean
                 else:
-                    features_adv = self._generate_adversarial(S, v, Z)
+                    features_adv = self._generate_adversarial(features, S, Z)
                     deltas_adv, y_adv = self.model(features_adv, S)
                     loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
                     loss = loss_adv
                     total_loss_adv += loss_adv.item()
             
-            else:
-                # Full adversarial training (fgsm, pgd, curriculum)
-                features_adv = self._generate_adversarial(S, v, Z)
+            else:  # fgsm, pgd, curriculum
+                features_adv = self._generate_adversarial(features, S, Z)
                 deltas_adv, y_adv = self.model(features_adv, S)
                 loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
                 loss = loss_adv
@@ -332,12 +461,9 @@ class AdversarialTrainer:
         """
         Validate the model.
         
-        Args:
-            val_loader: Validation data loader
-            include_adversarial: Whether to compute adversarial metrics
-            
-        Returns:
-            Validation metrics
+        NOTE: Even though this method is decorated with @torch.no_grad(),
+        adversarial evaluation works because attack methods use 
+        torch.enable_grad() internally.
         """
         self.model.eval()
         
@@ -370,10 +496,10 @@ class AdversarialTrainer:
             pnl_clean = self.loss_fn.compute_pnl(deltas, S, Z, self.dt)
             all_pnls_clean.append(pnl_clean.cpu())
             
-            # Adversarial evaluation (need to temporarily enable gradients)
+            # Adversarial evaluation
+            # NOTE: _generate_adversarial uses attacks that have enable_grad() internally
             if include_adversarial and self.adv_mode != 'none':
-                with torch.enable_grad():
-                    features_adv = self._generate_adversarial(S, v, Z)
+                features_adv = self._generate_adversarial(features, S, Z)
                 deltas_adv, y_adv = self.model(features_adv, S)
                 loss_adv, _ = self.loss_fn(deltas_adv, S, Z, y_adv, self.dt)
                 
@@ -384,7 +510,7 @@ class AdversarialTrainer:
             
             n_batches += 1
         
-        # Compute CVaR using monitoring_alpha (from config, not from loss)
+        # Compute CVaR
         alpha = self.monitoring_alpha
         all_pnls_clean = torch.cat(all_pnls_clean)
         sorted_pnls, _ = torch.sort(all_pnls_clean)
@@ -416,17 +542,7 @@ class AdversarialTrainer:
         val_loader: DataLoader,
         start_epoch: int = 0
     ) -> Dict[str, Any]:
-        """
-        Full adversarial training loop.
-        
-        Args:
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            start_epoch: Starting epoch (for resumption)
-            
-        Returns:
-            Training results
-        """
+        """Full adversarial training loop with optional LR warmup."""
         self.current_epoch = start_epoch
         start_time = time.time()
         
@@ -436,16 +552,27 @@ class AdversarialTrainer:
             sparsity = self.pruning_manager.get_sparsity().get('total', 0)
             sparsity_info = f", Sparsity: {sparsity:.1%}"
         
+        # Warmup info
+        warmup_info = ""
+        if self.warmup_scheduler is not None:
+            warmup_info = f", Warmup: {self.warmup_scheduler.warmup_epochs} epochs"
+        
         print(f"\n{'='*70}")
         print(f"Starting ADVERSARIAL training from epoch {start_epoch + 1}")
         print(f"Mode: {self.adv_mode.upper()}")
-        print(f"Loss type: {self.loss_type.upper()}{sparsity_info}")
+        print(f"Loss type: {self.loss_type.upper()}{sparsity_info}{warmup_info}")
         print(f"Device: {self.device}")
         print(f"{'='*70}\n")
         
         for epoch in range(start_epoch, self.epochs):
             self.current_epoch = epoch
             epoch_start = time.time()
+            
+            # Update learning rate via warmup scheduler
+            if self.warmup_scheduler is not None:
+                current_lr = self.warmup_scheduler.step(epoch)
+            else:
+                current_lr = self.optimizer.param_groups[0]['lr']
             
             # Train
             train_metrics = self.train_epoch(train_loader)
@@ -455,7 +582,7 @@ class AdversarialTrainer:
             
             # Combine metrics
             metrics = {**train_metrics, **val_metrics, 'epoch': epoch + 1}
-            metrics['lr'] = self.optimizer.param_groups[0]['lr']
+            metrics['lr'] = current_lr
             metrics['epoch_time'] = time.time() - epoch_start
             
             # Add sparsity to metrics if pruning is active
@@ -464,7 +591,7 @@ class AdversarialTrainer:
             
             self.training_history.append(metrics)
             
-            # Check for improvement (use clean val loss for model selection)
+            # Check for improvement
             if val_metrics['val_loss'] < self.best_val_loss - 1e-6:
                 self.best_val_loss = val_metrics['val_loss']
                 self.epochs_without_improvement = 0
@@ -476,22 +603,25 @@ class AdversarialTrainer:
                 self.epochs_without_improvement += 1
                 improved = ""
             
-            # Logging - show PnL Mean and Std for both loss types
+            # Logging
             sparsity_str = ""
             if self.pruning_manager is not None and self.pruning_manager.is_pruned():
                 sparsity_str = f" | Sp: {metrics.get('sparsity', 0):.1%}"
             
+            warmup_str = ""
+            if self.warmup_scheduler is not None and epoch < self.warmup_scheduler.warmup_epochs:
+                warmup_str = " [WARMUP]"
+            
             log_str = (
                 f"Epoch {epoch + 1:3d}/{self.epochs} | "
+                f"LR: {current_lr:.6f}{warmup_str} | "
                 f"Loss: {train_metrics['train_loss']:.4f} | "
                 f"Val: {val_metrics['val_loss']:.4f} | "
-                f"PnL: {val_metrics['val_pnl_mean']:.4f} | "
-                f"Std: {val_metrics['val_pnl_std']:.4f}"
+                f"PnL: {val_metrics['val_pnl_mean']:.4f}"
             )
             
             if 'val_loss_adv' in val_metrics:
                 log_str += f" | Val_Adv: {val_metrics['val_loss_adv']:.4f}"
-                log_str += f" | Gap: {val_metrics['val_robustness_gap']:.4f}"
             
             if self.adv_mode == 'curriculum':
                 log_str += f" | ε: {self._get_current_epsilon():.4f}"
@@ -518,7 +648,6 @@ class AdversarialTrainer:
         print(f"Adversarial training completed in {total_time:.1f}s")
         print(f"Best validation loss: {self.best_val_loss:.6f}")
         
-        # Print final price estimate based on loss type
         if self.training_history:
             final_pnl_mean = self.training_history[-1]['val_pnl_mean']
             final_premium = self.training_history[-1]['val_premium']
@@ -527,7 +656,6 @@ class AdversarialTrainer:
             else:
                 print(f"Learned premium y: {final_premium:.4f}")
             
-            # Print final sparsity if pruning is active
             if self.pruning_manager is not None and self.pruning_manager.is_pruned():
                 final_sparsity = self.training_history[-1].get('sparsity', 0)
                 print(f"Final sparsity: {final_sparsity:.2%}")
@@ -553,19 +681,31 @@ class AdversarialTrainer:
             'adv_mode': self.adv_mode
         }
         
+        if self.warmup_scheduler is not None:
+            checkpoint['warmup_state'] = {
+                'current_epoch': self.warmup_scheduler.current_epoch,
+                'lr_start': self.warmup_scheduler.lr_start,
+                'lr_end': self.warmup_scheduler.lr_end,
+                'warmup_epochs': self.warmup_scheduler.warmup_epochs
+            }
+        
         path = os.path.join(self.checkpoint_dir, f'{name}.pt')
         torch.save(checkpoint, path)
     
     def load_checkpoint(self, name: str) -> int:
         """Load checkpoint and return resume epoch."""
         path = os.path.join(self.checkpoint_dir, f'{name}.pt')
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.best_val_loss = checkpoint['best_val_loss']
         self.epochs_without_improvement = checkpoint['epochs_without_improvement']
         self.training_history = checkpoint.get('training_history', [])
+        
+        if 'warmup_state' in checkpoint and self.warmup_scheduler is not None:
+            ws = checkpoint['warmup_state']
+            self.warmup_scheduler.current_epoch = ws['current_epoch']
         
         print(f"[AdvTrainer] Loaded checkpoint '{name}' (epoch {checkpoint['epoch'] + 1})")
         return checkpoint['epoch'] + 1
