@@ -19,9 +19,9 @@ checkpointing:
   enabled: true
   directory: "./checkpoints"
   # Fréquence de sauvegarde (en epochs)
-  save_freq: 10
+  save_freq: 15
   # Garder les N derniers checkpoints
-  keep_last: 3
+  keep_last: 10
 
 # ============================================================================
 # DATA CONFIGURATION
@@ -40,14 +40,14 @@ data:
     rho: -0.5711      # Correlation spot-vol
 
   # Dataset sizes
-  n_train: 60000     # Number of training samples
-  n_val: 15000        # Number of validation samples (1%)
+  n_train: 100000     # Number of training samples
+  n_val: 15000        # Number of validation samples (25%)
   n_test: 15000       # Number of test samples
 
   # Simulation parameters
-  T: 0.25             # 3 month in years     
-  n_steps: 540        # Hedge per day (540 steps for 3 months with 4h steps)
-  dt: 0.000463         # T / n_steps 
+  T: 0.083333         # 1 month in years     
+  n_steps: 120        # Hedge per day (540 steps for 2 months with 8h steps)
+  dt: 0.0006944       # T / n_steps 
 
   # Transaction costs
   transaction_cost:
@@ -70,12 +70,12 @@ model:
   # Total network input = 5 + 3 = 8
   
   # Architecture (from Buehler et al.)
-  hidden_dims: [128, 64, 32]      # [256, 256, 128] or [50, 50, 20]
+  hidden_dims: [256, 256, 128]    # [128, 64, 32], [256, 256, 128] or [50, 50, 20]
   dropout_rates: [0.0, 0.0, 0.0]  # Pas de dropout par défaut
   use_batch_norm: false           # Pas de batch norm par défaut (comme Buehler)
   
   # Activation
-  activation: "tanh"   # 'relu', 'leaky_relu', 'tanh'
+  activation: "relu"   # 'relu', 'leaky_relu', 'tanh'
 
 # ============================================================================
 # TRAINING CONFIGURATION
@@ -88,7 +88,7 @@ training:
   
   # Training params
   epochs: 300 
-  batch_size: 256        # 1024 ou 2048 possible     
+  batch_size: 512        # 256 ou 1024 ou 2048 possible     
   
   # Loss function
   loss_type: "cvar"      # 'cvar', 'entropic', 'mean_variance'
@@ -117,7 +117,8 @@ training:
 # ============================================================================
 pruning:
   # Sparsity levels to test
-  sparsities: [0.5, 0.7, 0.8, 0.9, 0.95]
+  sparsities: [0.5, 0.8, 0.9, 0.95]
+  pruning_lr_candidates : [0.001, 0.01, 0.0001, 0.00001]   # Learning rates to try during pruning phase
   
   # Default target sparsity
   target_sparsity: 0.8
@@ -173,16 +174,16 @@ adversarial_training:
   # Phase 2: PGD retraining with warmup
   pgd_phase:
     attack_type: "pgd"
-    epochs: 200
-    lr_start: 0.0002     # Warmup start 
+    epochs: 250
+    lr_start: 0.0001     # Warmup start 
     lr_end: 0.001        # Warmup end 0.01
     warmup_epochs: 30
-    epochs_candidates: [50, 150, 200] 
+    epochs_candidates: [250] # Epochs to try during PGD phase
 
 # warmup settings for PGD phase
 warmup:
   enabled: true
-  lr_start: 0.0002
+  lr_start: 0.0001
   lr_end: 0.001
   warmup_epochs: 30
   warmup_type: 'linear'    # ou 'cosine', 'exponential'
