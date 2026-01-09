@@ -167,13 +167,13 @@ adversarial:
 
 ## Authors
 
-- Abdoulaye Traore (ENSTA & ENSAE Paris)
-- Tingjia Zhang (ENSTA & ENSAE Paris)
-- Franck Wilson Kouassi (ENSTA & ENSAE Paris)
+- Abdoulaye TRAORE (ENSTA & ENSAE Paris)
+- Tingjia ZHANG (ENSTA & ENSAE Paris)
+- Franck Wilson KOUASSI (ENSTA & ENSAE Paris)
 
 Master's students in Statistics, Finance & Actuarial Science, Institut Polytechnique de Paris.
 
-Supervised by Professor Champonnois.
+Supervised by Professor AUSTIN. J.
 
 ## License
 
