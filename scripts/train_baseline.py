@@ -155,10 +155,8 @@ def main():
         config=config,
         log_dir=str(experiment_dir / 'logs')
     )
-    
-    # =========================================================================
+
     # DATA GENERATION / LOADING
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 1: Data Generation")
     logger.info("=" * 60)
@@ -194,9 +192,7 @@ def main():
     )
     logger.info(f"Created dataloaders with batch_size={batch_size}")
     
-    # =========================================================================
     # BASELINE EVALUATION
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 2: Baseline Evaluation")
     logger.info("=" * 60)
@@ -211,9 +207,7 @@ def main():
     for name, metrics in baseline_results.items():
         logger.log_metrics(metrics, prefix=f"Baseline: {name}")
     
-    # =========================================================================
     # MODEL CREATION
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 3: Model Creation")
     logger.info("=" * 60)
@@ -224,10 +218,8 @@ def main():
     
     # Create loss function
     loss_fn = create_loss_function(config)
-    
-    # =========================================================================
+  
     # TRAINING
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 4: Training")
     logger.info("=" * 60)
@@ -266,9 +258,7 @@ def main():
     logger.info(f"Best validation loss: {training_results['best_val_loss']:.6f}")
     logger.info(f"Final epoch: {training_results['final_epoch']}")
     
-    # =========================================================================
     # EVALUATION
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 5: Final Evaluation")
     logger.info("=" * 60)
@@ -325,9 +315,7 @@ def main():
     print_metrics(test_metrics, title="Test Set Evaluation")
     logger.log_metrics(test_metrics, prefix="Test")
     
-    # =========================================================================
     # COMPARISON WITH BASELINES
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 6: Model vs Baselines Comparison")
     logger.info("=" * 60)
@@ -351,9 +339,7 @@ def main():
     
     logger.log_comparison_table(comparison)
     
-    # =========================================================================
     # SAVE RESULTS
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("STEP 7: Saving Results")
     logger.info("=" * 60)

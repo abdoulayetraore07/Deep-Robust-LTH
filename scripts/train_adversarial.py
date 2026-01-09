@@ -264,9 +264,7 @@ def main():
         log_dir=str(experiment_dir / 'logs')
     )
     
-    # =========================================================================
     # DATA
-    # =========================================================================
     logger.info("Loading data...")
     cache_dir = config.get('caching', {}).get('directory', 'cache')
     
@@ -282,9 +280,7 @@ def main():
         batch_size=batch_size
     )
     
-    # =========================================================================
     # MODEL
-    # =========================================================================
     logger.info("Creating model...")
     model = create_model(config)
     loss_fn = create_loss_function(config)
@@ -308,9 +304,7 @@ def main():
     model = model.to(device)
     logger.log_model_summary(model.summary())
     
-    # =========================================================================
     # ADVERSARIAL TRAINING
-    # =========================================================================
     logger.info("=" * 60)
     if pruning_manager:
         sparsity = pruning_manager.get_sparsity().get('total', 0)
@@ -342,9 +336,7 @@ def main():
         start_epoch=start_epoch
     )
     
-    # =========================================================================
     # ROBUSTNESS EVALUATION
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("ROBUSTNESS EVALUATION")
     logger.info("=" * 60)
@@ -366,9 +358,7 @@ def main():
         model, loss_fn, test_loader, config, device, logger
     )
     
-    # =========================================================================
     # COMPARISON
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("FINAL COMPARISON")
     logger.info("=" * 60)
@@ -393,9 +383,7 @@ def main():
     
     logger.log_comparison_table(comparison, metric_keys=['mean_pnl', 'cvar_05', 'sharpe'])
     
-    # =========================================================================
     # SAVE RESULTS
-    # =========================================================================
     final_results = {
         'training': training_results,
         'robustness': robustness_results,

@@ -109,7 +109,6 @@ evaluation:
     - sharpe_ratio
     - cvar_005
     - hedging_error_rmse
-  n_bootstrap: 100
 
 logging:
   use_tensorboard: false

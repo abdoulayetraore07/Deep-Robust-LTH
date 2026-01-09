@@ -200,9 +200,7 @@ def main():
         log_dir=str(experiment_dir / 'logs')
     )
     
-    # =========================================================================
     # DATA
-    # =========================================================================
     logger.info("Loading data...")
     cache_dir = config.get('caching', {}).get('directory', 'cache')
     
@@ -218,9 +216,7 @@ def main():
         batch_size=batch_size
     )
     
-    # =========================================================================
     # MODEL & PRUNING SETUP
-    # =========================================================================
     logger.info("Creating model...")
     model = create_model(config)
     model = model.to(device)
@@ -239,9 +235,7 @@ def main():
     # Results storage
     results_by_sparsity = {}
     
-    # =========================================================================
     # ITERATIVE MAGNITUDE PRUNING
-    # =========================================================================
     logger.info("=" * 60)
     logger.info("ITERATIVE MAGNITUDE PRUNING")
     logger.info("=" * 60)
@@ -324,9 +318,7 @@ def main():
             
             current_sparsity = next_sparsity
     
-    # =========================================================================
     # ANALYSIS
-    # =========================================================================
     logger.info("\n" + "=" * 60)
     logger.info("LOTTERY TICKET ANALYSIS")
     logger.info("=" * 60)
@@ -366,9 +358,7 @@ def main():
     logger.info(f"  Sparsity: {max_efficient_sparsity:.0%}")
     logger.info(f"  Remaining weights: {(1-max_efficient_sparsity)*100:.1f}%")
     
-    # =========================================================================
     # SAVE RESULTS
-    # =========================================================================
     logger.info("\n" + "=" * 60)
     logger.info("SAVING RESULTS")
     logger.info("=" * 60)
